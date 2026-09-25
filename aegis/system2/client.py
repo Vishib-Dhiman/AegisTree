@@ -113,7 +113,11 @@ class MockGenerator:
 
         p_low = prompt.lower()
         if "session_token" in p_low or ("session" in p_low and "token" in p_low) or "aegis_seal" in p_low:
-            retries = 1 if "retries=1" in prompt else 3
+            m_retries = re.search(r"must set retries=(\d+)", prompt) or re.search(r"retries=(\d+)", prompt)
+            retries = int(m_retries.group(1)) if m_retries else 3
+            m_timeout = re.search(r"must set timeout_s=([0-9.]+)", prompt) or re.search(r"timeout_s=([0-9.]+)", prompt)
+            timeout_s = float(m_timeout.group(1)) if m_timeout else 5.0
+
             if "rotate" in p_low:
                 fn_name = "rotate_session_token"
             else:
@@ -122,7 +126,7 @@ class MockGenerator:
             code = (
                 f"```python\n"
                 f"def {fn_name}(token: str) -> str:\n"
-                f'    return aegis_seal(token, key_id="kek-2026", timeout_s=5.0, retries={retries})\n'
+                f'    return aegis_seal(token, key_id="kek-2026", timeout_s={timeout_s}, retries={retries})\n'
                 f"```"
             )
         elif "oaep" in p_low or "rsa" in p_low or "encrypt" in p_low:

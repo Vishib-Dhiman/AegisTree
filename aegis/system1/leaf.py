@@ -155,8 +155,8 @@ def compile_leaf(
         f"{current_source}\n\n"
         "ALLOWED HELPER, already in the repo:\n"
         f"{seal_source}\n\n"
-        "The ADR does not specify retries. If no habit names a retries value, use retries=3.\n"
-        "If a habit names a retries value, use that value.\n\n"
+        "If a habit specifies retries, use that value; otherwise retries=3.\n"
+        "If a habit specifies timeout_s, use that value.\n\n"
         "USER REQUEST:\n"
         f"{prompt}"
     )

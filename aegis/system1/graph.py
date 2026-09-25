@@ -255,6 +255,43 @@ class MemoryGraph:
         meta: Dict[str, Any] = {"source_receipt_id": source_receipt_id} if source_receipt_id is not None else {}
         if metadata:
             meta.update(metadata)
+
+        # Bi-temporal supersession: If a habit with the same key already exists, supersede it
+        key = meta.get("key")
+        if not key:
+            if "retries=" in text:
+                key = "retries"
+            elif "timeout_s=" in text:
+                key = "timeout_s"
+            elif "key_id=" in text:
+                key = "key_id"
+            if key:
+                meta["key"] = key
+
+        if key:
+            for active in self.active_nodes(now):
+                if active.type == NodeType.HABIT:
+                    active_key = active.metadata.get("key")
+                    if not active_key:
+                        if "retries=" in active.label:
+                            active_key = "retries"
+                        elif "timeout_s=" in active.label:
+                            active_key = "timeout_s"
+                        elif "key_id=" in active.label:
+                            active_key = "key_id"
+                    if active_key == key and active.id != habit_id:
+                        active.superseded_at = now
+                        active.epistemic_status = EpistemicStatus.SUPERSEDED
+                        self.upsert_node(active)
+                        edge = BiTemporalEdge(
+                            source=habit_id,
+                            target=active.id,
+                            relation="supersedes",
+                            system_time=now,
+                            valid_from=now,
+                        )
+                        self.upsert_edge(edge)
+
         node = GraphNode(
             id=habit_id,
             type=NodeType.HABIT,
