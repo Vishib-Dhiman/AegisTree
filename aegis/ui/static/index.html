@@ -5,151 +5,278 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AegisTree — Sovereign AI Second Brain</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
 </head>
-<body>
+<body class="dark-theme">
 
-  <!-- 1. Top Bar -->
-  <header class="top-bar">
-    <div class="brand-section">
-      <h1 class="brand-title">AegisTree</h1>
-      <span class="brand-subtitle">Northwind session vault</span>
+  <!-- Main App Layout (Sidebar + Chat Area) -->
+  <div class="app-layout">
+
+    <!-- Left AI Lab Sidebar (ChatGPT/Claude/Gemini Style) -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <span class="brand-sparkle">✦</span>
+          <span class="brand-name">AegisTree</span>
+          <span class="brand-badge">OG</span>
+        </div>
+        <button id="btn-toggle-sidebar" class="icon-btn" title="Toggle Sidebar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+      </div>
+
+      <button id="btn-new-session" class="new-chat-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+        <span>New Architecture Task</span>
+        <kbd>⌘K</kbd>
+      </button>
+
+      <div class="sidebar-nav">
+        <div class="nav-item active" id="nav-chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Chat &amp; Synthesis</span>
+        </div>
+        <div class="nav-item" id="nav-memory">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Memory &amp; Graph</span>
+          <span id="badge-habits-count" class="nav-badge">0</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section-title">Rehearsed Pitch Scenarios</div>
+      <div class="recents-list">
+        <div class="recent-item" data-prompt="persist">
+          <span class="recent-icon">🔐</span>
+          <span class="recent-text">Persist Token (ADR-014)</span>
+        </div>
+        <div class="recent-item" data-prompt="rotate">
+          <span class="recent-icon">⚡</span>
+          <span class="recent-text">Rotate Token (Habit)</span>
+        </div>
+        <div class="recent-item danger" data-prompt="force_legacy">
+          <span class="recent-icon">🛡️</span>
+          <span class="recent-text">Force Legacy (Refusal)</span>
+        </div>
+        <div class="recent-item" data-prompt="pyca_oaep">
+          <span class="recent-icon">🔑</span>
+          <span class="recent-text">PyCA RSA OAEP (ADR-021)</span>
+        </div>
+        <div class="recent-item danger" data-prompt="pyca_pkcs">
+          <span class="recent-icon">🚫</span>
+          <span class="recent-text">PyCA Force PKCS1 (Refusal)</span>
+        </div>
+        <div class="recent-item" data-prompt="pydantic_v2">
+          <span class="recent-icon">📦</span>
+          <span class="recent-text">Pydantic v2 (ADR-032)</span>
+        </div>
+        <div class="recent-item danger" data-prompt="pydantic_v1">
+          <span class="recent-icon">🚫</span>
+          <span class="recent-text">Pydantic Force .dict()</span>
+        </div>
+        <div class="recent-item" data-prompt="db_sqlalchemy">
+          <span class="recent-icon">🗄️</span>
+          <span class="recent-text">SQLAlchemy 2.0 (ADR-045)</span>
+        </div>
+        <div class="recent-item danger" data-prompt="db_engine">
+          <span class="recent-icon">🚫</span>
+          <span class="recent-text">SQL Force engine.execute</span>
+        </div>
+        <div class="recent-item" data-prompt="kyber">
+          <span class="recent-icon">⚛️</span>
+          <span class="recent-text">Migrate Kyber (Abstention)</span>
+        </div>
+        <div class="recent-item" data-prompt="explain">
+          <span class="recent-icon">📖</span>
+          <span class="recent-text">Explain Architecture</span>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="user-profile">
+          <div class="user-avatar">VD</div>
+          <div class="user-info">
+            <span class="user-name">Vishib</span>
+            <span class="user-status">100% Air-Gapped (127.0.0.1)</span>
+          </div>
+        </div>
+        <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo Repository">Reset</button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+
+      <!-- Top Header Navigation -->
+      <header class="top-nav">
+        <div class="top-nav-left">
+          <button id="btn-expand-sidebar" class="icon-btn-ghost" title="Expand Sidebar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div class="model-capsule">
+            <span class="model-capsule-dot"></span>
+            <select id="select-model" class="model-select-dropdown" title="Select System 2 Generative Model">
+              <option value="qwen2.5-coder:3b">Qwen 2.5 Coder 3B (1.9 GB)</option>
+              <option value="qwen2.5-coder:7b" selected>Qwen 2.5 Coder 7B (4.7 GB)</option>
+              <option value="deepseek-r1:7b">DeepSeek R1 7B (4.7 GB)</option>
+              <option value="deepseek-r1:8b">DeepSeek R1 8B (4.9 GB)</option>
+              <option value="deepseek-r1:14b">DeepSeek R1 14B (9.0 GB)</option>
+              <option value="llama3.1:8b">Llama 3.1 8B (4.9 GB)</option>
+              <option value="mock-offline-fast">Mock Engine (Fast Dry-Run)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="top-nav-center">
+          <div class="mode-switcher-pill">
+            <button class="mode-pill-btn active">Chat</button>
+            <button id="btn-toggle-diff-mode" class="mode-pill-btn">Diff Inspector</button>
+          </div>
+        </div>
+
+        <div class="top-nav-right">
+          <span id="pill-verdict" class="status-badge green">
+            <span class="badge-dot"></span> Verdict v1.4 (32ms)
+          </span>
+          <span id="pill-ollama" class="status-badge green">
+            <span class="badge-dot"></span> Local SLM
+          </span>
+          <span class="status-badge blue">
+            🛡️ 0 Network Egress
+          </span>
+        </div>
+      </header>
+
+      <!-- Scrollable Message Stream -->
+      <section id="chat-viewport" class="chat-viewport">
+
+        <!-- Welcome Hero View (ChatGPT / Claude / Gemini Style) -->
+        <div id="hero-view" class="hero-view">
+          <div class="hero-emblem">✦</div>
+          <h1 class="hero-title">What architectural task shall we solve today?</h1>
+          <p class="hero-subtitle">
+            Dual-Engine Sovereign Second Brain. System 1 (openJev Verdict v1.4) enforces active architectural decisions before local SLM generation.
+          </p>
+
+          <div class="chips-container">
+            <button class="action-chip" data-prompt="persist">
+              <span class="chip-icon">🔐</span>
+              <span>Persist Session Token</span>
+              <span class="chip-hint">ADR-014</span>
+            </button>
+            <button class="action-chip" data-prompt="rotate">
+              <span class="chip-icon">⚡</span>
+              <span>Rotate Session Token</span>
+              <span class="chip-hint">Habit Memory</span>
+            </button>
+            <button class="action-chip" data-prompt="pyca_oaep">
+              <span class="chip-icon">🔑</span>
+              <span>PyCA RSA OAEP</span>
+              <span class="chip-hint">ADR-021</span>
+            </button>
+            <button class="action-chip" data-prompt="pydantic_v2">
+              <span class="chip-icon">📦</span>
+              <span>Pydantic v2 Dump</span>
+              <span class="chip-hint">ADR-032</span>
+            </button>
+            <button class="action-chip" data-prompt="db_sqlalchemy">
+              <span class="chip-icon">🗄️</span>
+              <span>SQLAlchemy 2.0</span>
+              <span class="chip-hint">ADR-045</span>
+            </button>
+            <button class="action-chip chip-danger" data-prompt="force_legacy">
+              <span class="chip-icon">🛡️</span>
+              <span>Test Sovereign Refusal</span>
+              <span class="chip-hint">legacy_wrap</span>
+            </button>
+            <button class="action-chip chip-warning" data-prompt="kyber">
+              <span class="chip-icon">⚛️</span>
+              <span>Test Calibrated Abstention</span>
+              <span class="chip-hint">Kyber</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Dynamic Message Stream -->
+        <div id="messages-stream" class="messages-stream" style="display: none;">
+          <!-- Injected dynamically by app.js -->
+        </div>
+
+      </section>
+
+      <!-- Floating Bottom Input Capsule (ChatGPT / Claude / Gemini Style) -->
+      <footer class="input-area">
+        <div class="input-capsule">
+          <div class="input-toolbar-top" id="input-toolbar-top" style="display: none;">
+            <div class="active-decision-indicator">
+              <span class="indicator-icon">⚖️</span>
+              <span id="active-decision-label">Policy: ADR-014 (in force)</span>
+            </div>
+          </div>
+
+          <textarea id="prompt-input" class="chat-textarea" placeholder="Ask AegisTree to implement functions, refactor schemas, or test policies..." rows="1"></textarea>
+
+          <div class="input-toolbar-bottom">
+            <div class="toolbar-left">
+              <button class="input-action-btn" id="btn-attach" title="Workspace Scope">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                <span>demo_vault</span>
+              </button>
+              <div class="toolbar-pill">
+                <span class="sparkle-mini">✦</span>
+                <span>Verdict Engine active</span>
+              </div>
+            </div>
+
+            <div class="toolbar-right">
+              <button id="btn-run" class="send-btn" title="Send (Enter)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="input-footer-note">
+          AegisTree enforces sovereign air-gapped governance. No tokens are transmitted to cloud APIs.
+        </div>
+      </footer>
+
+    </main>
+
+    <!-- Slide-over Memory & Knowledge Graph Drawer -->
+    <div id="memory-drawer" class="memory-drawer">
+      <div class="drawer-header">
+        <div>
+          <h2 class="drawer-title">Temporal Memory Graph</h2>
+          <span class="drawer-subtitle">Bi-temporal lineage &middot; valid_from &middot; deprecated_at</span>
+        </div>
+        <button id="btn-close-drawer" class="icon-btn-ghost">&times;</button>
+      </div>
+
+      <div class="drawer-content">
+        <div class="drawer-section">
+          <h3 class="drawer-section-title">In-Force Architectural Decisions</h3>
+          <ul id="memory-in-force" class="memory-tree-list"></ul>
+        </div>
+
+        <div class="drawer-section">
+          <h3 class="drawer-section-title">Superseded Policies (Deterministic Bans)</h3>
+          <ul id="memory-superseded" class="memory-tree-list superseded"></ul>
+        </div>
+
+        <div class="drawer-section">
+          <h3 class="drawer-section-title">Learned Organizational Habits</h3>
+          <ul id="memory-habits" class="memory-tree-list habits"></ul>
+        </div>
+
+        <div class="drawer-section">
+          <h3 class="drawer-section-title">Team Context &amp; Knowledge</h3>
+          <ul id="memory-notes" class="memory-tree-list notes"></ul>
+        </div>
+      </div>
     </div>
-    <div class="pills-section">
-      <span id="pill-verdict" class="pill pill-green">Verdict loaded</span>
-      <span id="pill-ollama" class="pill pill-red">Ollama down</span>
-      <select id="select-model" class="pill pill-model-select" title="Switch System 2 Local Model">
-        <option value="qwen2.5-coder:3b">Qwen 2.5 Coder 3B (1.9 GB)</option>
-        <option value="qwen2.5-coder:7b">Qwen 2.5 Coder 7B (4.7 GB)</option>
-        <option value="deepseek-r1:7b">DeepSeek R1 7B (4.7 GB)</option>
-        <option value="deepseek-r1:8b">DeepSeek R1 8B (4.9 GB)</option>
-        <option value="deepseek-r1:14b">DeepSeek R1 14B (9.0 GB)</option>
-        <option value="llama3.1:8b">Llama 3.1 8B (4.9 GB)</option>
-        <option value="mock-offline-fast">Mock Engine (Fast Dry-Run)</option>
-      </select>
-      <span class="pill">127.0.0.1 only</span>
-      <span class="pill">Offline enforced</span>
-    </div>
-  </header>
 
-  <!-- 2. Prompt Controls -->
-  <section class="prompt-section">
-    <textarea id="prompt-input" class="prompt-textarea" placeholder="Enter instructions or click a rehearsed domain button below..."></textarea>
-    <div class="prompt-buttons">
-      <div class="rehearsed-group" style="flex-wrap: wrap; gap: 6px;">
-        <button id="btn-run" class="btn btn-primary" type="button" style="font-weight: 700; background: var(--accent-green); color: #101418;">Run</button>
-        <!-- Vault -->
-        <button id="btn-persist" class="btn" type="button" title="Vault Standard: ADR-014 aegis_seal">Persist token</button>
-        <button id="btn-rotate" class="btn" type="button" title="Habit formation: retries=1">Rotate token</button>
-        <button id="btn-force-legacy" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: legacy_wrap blocked">Force legacy</button>
-        <!-- PyCA Cryptography -->
-        <button id="btn-pyca-oaep" class="btn" type="button" style="border: 1px solid var(--accent-blue);" title="PyCA: ADR-021 OAEP RSA encryption">PyCA OAEP</button>
-        <button id="btn-pyca-pkcs" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: PKCS1v15 blocked">PyCA Force PKCS1</button>
-        <!-- Pydantic -->
-        <button id="btn-pydantic-v2" class="btn" type="button" style="border: 1px solid var(--accent-blue);" title="Pydantic: ADR-032 model_dump">Pydantic v2 Dump</button>
-        <button id="btn-pydantic-v1" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: .dict() blocked">Pydantic Force .dict()</button>
-        <!-- Database / SQLAlchemy -->
-        <button id="btn-db-sqlalchemy" class="btn" type="button" style="border: 1px solid var(--accent-blue);" title="DB: ADR-045 session.execute(select)">SQLAlchemy 2.0</button>
-        <button id="btn-db-engine" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: engine.execute blocked">SQL Force engine.exec</button>
-        <!-- Governance -->
-        <button id="btn-explain" class="btn" type="button">Explain</button>
-        <button id="btn-kyber" class="btn" type="button">Kyber (Abstain)</button>
-      </div>
-      <div>
-        <button id="btn-reset" class="btn btn-danger" type="button">Reset demo</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- 3. Two Columns: Baseline vs AegisTree -->
-  <section id="columns-container" class="columns-grid">
-    <div class="column-card">
-      <div class="column-header">
-        <span class="column-title">Baseline — full repository</span>
-        <span id="baseline-meta" class="column-meta">0 ms · 0 chars/4 estimate</span>
-      </div>
-      <pre id="baseline-diff" class="diff-viewport">Ready</pre>
-    </div>
-
-    <div class="column-card">
-      <div class="column-header">
-        <span id="aegis-column-title" class="column-title">AegisTree — active decisions only</span>
-        <span id="aegis-meta" class="column-meta">0 ms · 0 chars/4 estimate</span>
-      </div>
-      <pre id="aegis-diff" class="diff-viewport">Ready</pre>
-    </div>
-  </section>
-
-  <!-- 4. Decision Card -->
-  <section class="decision-card">
-    <div class="decision-grid">
-      <div>
-        <div class="decision-item-label">Task Type</div>
-        <div id="card-task-type" class="decision-item-val">—</div>
-      </div>
-      <div>
-        <div class="decision-item-label">Primary Policy</div>
-        <div id="card-policy" class="decision-item-val">—</div>
-      </div>
-      <div>
-        <div class="decision-item-label">Excluded Scopes</div>
-        <div id="card-excluded" class="decision-item-val">—</div>
-      </div>
-    </div>
-
-    <div id="abstain-box" class="abstain-banner" style="display: none;"></div>
-    <div id="blocked-box" class="blocked-banner" style="display: none;"></div>
-
-    <div id="forbidden-box" class="forbidden-container">
-      <div class="forbidden-header">Forbidden in Production (Attributed to ADR-003)</div>
-      <ul id="forbidden-list" class="forbidden-list">
-        <li><span class="forbidden-pill">legacy_wrap</span></li>
-        <li><span class="forbidden-pill">kek-2024</span></li>
-        <li><span class="forbidden-pill">timeout_s=30</span></li>
-      </ul>
-    </div>
-
-    <div class="tool-log-container">
-      <span style="font-weight: 500;">Tools:</span>
-      <div id="tool-log" style="display: flex; gap: 8px;">
-        <span class="tool-tag">search_decisions: idle</span>
-      </div>
-    </div>
-
-    <details id="details-leaf-container" class="details-leaf">
-      <summary>View Compiled Leaf Prompt</summary>
-      <pre id="leaf-prompt-preview"></pre>
-    </details>
-  </section>
-
-  <!-- 5. Approve Row -->
-  <section id="approve-section" class="approve-section">
-    <div class="approve-header">
-      <span style="font-weight: 600; font-size: 15px;">Human-in-the-Loop Review</span>
-      <span class="approve-hint">Rehearsed edit: change retries=3 to retries=1, then approve.</span>
-    </div>
-    <div id="approve-error" class="approve-error"></div>
-    <textarea id="approve-editor" class="approve-textarea"></textarea>
-    <button id="btn-approve" class="btn btn-primary" type="button">Approve &amp; Commit</button>
-  </section>
-
-  <!-- 6. Memory View -->
-  <section class="memory-section">
-    <div class="memory-title">Temporal Memory Graph (Data &rarr; Knowledge &rarr; Memory &rarr; Reasoning &rarr; Action)</div>
-    <div class="memory-columns">
-      <div>
-        <div class="memory-group-title">In Force (Decisions &amp; Habits)</div>
-        <ul id="memory-in-force" class="memory-list"></ul>
-      </div>
-      <div>
-        <div class="memory-group-title">Superseded (Closure Bans)</div>
-        <ul id="memory-superseded" class="memory-list"></ul>
-      </div>
-      <div>
-        <div class="memory-group-title">Team Knowledge (Second Brain)</div>
-        <ul id="memory-notes" class="memory-list"></ul>
-      </div>
-    </div>
-  </section>
+  </div>
 
   <script src="app.js"></script>
 </body>

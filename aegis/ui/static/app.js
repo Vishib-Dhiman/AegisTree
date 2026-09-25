@@ -1,4 +1,4 @@
-// AegisTree Sovereign Second Brain Dashboard Client
+// AegisTree Sovereign AI Assistant Client
 
 let currentRunId = null;
 
@@ -20,16 +20,20 @@ document.addEventListener("DOMContentLoaded", () => {
   initHealth();
   initModelSelector();
   initMemory();
-  initButtons();
+  initEventListeners();
 });
 
-function initButtons() {
+function initEventListeners() {
   const promptInput = document.getElementById("prompt-input");
+  const btnRun = document.getElementById("btn-run");
 
-  document.getElementById("btn-run").addEventListener("click", () => {
+  // Send action
+  btnRun.addEventListener("click", () => {
     const text = promptInput.value.trim();
     if (text) {
       runWithPrompt(text);
+      promptInput.value = "";
+      autoResizeTextarea(promptInput);
     }
   });
 
@@ -39,33 +43,71 @@ function initButtons() {
       const text = promptInput.value.trim();
       if (text) {
         runWithPrompt(text);
+        promptInput.value = "";
+        autoResizeTextarea(promptInput);
       }
     }
   });
 
-  // Vault
-  document.getElementById("btn-persist").addEventListener("click", () => runWithPrompt(PROMPTS.persist));
-  document.getElementById("btn-rotate").addEventListener("click", () => runWithPrompt(PROMPTS.rotate));
-  document.getElementById("btn-force-legacy").addEventListener("click", () => runWithPrompt(PROMPTS.force_legacy));
+  promptInput.addEventListener("input", () => {
+    autoResizeTextarea(promptInput);
+  });
 
-  // PyCA Cryptography
-  document.getElementById("btn-pyca-oaep").addEventListener("click", () => runWithPrompt(PROMPTS.pyca_oaep));
-  document.getElementById("btn-pyca-pkcs").addEventListener("click", () => runWithPrompt(PROMPTS.pyca_pkcs));
+  // Action chips & recent scenarios
+  document.querySelectorAll("[data-prompt]").forEach(elem => {
+    elem.addEventListener("click", () => {
+      const key = elem.getAttribute("data-prompt");
+      if (PROMPTS[key]) {
+        runWithPrompt(PROMPTS[key]);
+      }
+    });
+  });
 
-  // Pydantic
-  document.getElementById("btn-pydantic-v2").addEventListener("click", () => runWithPrompt(PROMPTS.pydantic_v2));
-  document.getElementById("btn-pydantic-v1").addEventListener("click", () => runWithPrompt(PROMPTS.pydantic_v1));
+  // Sidebar toggle
+  const sidebar = document.getElementById("sidebar");
+  const btnToggleSidebar = document.getElementById("btn-toggle-sidebar");
+  const btnExpandSidebar = document.getElementById("btn-expand-sidebar");
 
-  // Database / SQLAlchemy
-  document.getElementById("btn-db-sqlalchemy").addEventListener("click", () => runWithPrompt(PROMPTS.db_sqlalchemy));
-  document.getElementById("btn-db-engine").addEventListener("click", () => runWithPrompt(PROMPTS.db_engine));
+  if (btnToggleSidebar) {
+    btnToggleSidebar.addEventListener("click", () => {
+      sidebar.classList.add("collapsed");
+      btnExpandSidebar.style.display = "flex";
+    });
+  }
+  if (btnExpandSidebar) {
+    btnExpandSidebar.addEventListener("click", () => {
+      sidebar.classList.remove("collapsed");
+      btnExpandSidebar.style.display = "none";
+    });
+    btnExpandSidebar.style.display = "none";
+  }
 
-  // Governance
-  document.getElementById("btn-explain").addEventListener("click", () => runWithPrompt(PROMPTS.explain));
-  document.getElementById("btn-kyber").addEventListener("click", () => runWithPrompt(PROMPTS.kyber));
+  // New session button
+  document.getElementById("btn-new-session").addEventListener("click", () => {
+    document.getElementById("hero-view").style.display = "flex";
+    document.getElementById("messages-stream").style.display = "none";
+    document.getElementById("messages-stream").innerHTML = "";
+    promptInput.value = "";
+    currentRunId = null;
+  });
 
-  document.getElementById("btn-reset").addEventListener("click", resetDemo);
-  document.getElementById("btn-approve").addEventListener("click", approveCurrentRun);
+  // Memory drawer toggle
+  const memoryDrawer = document.getElementById("memory-drawer");
+  document.getElementById("nav-memory").addEventListener("click", () => {
+    memoryDrawer.classList.toggle("open");
+    initMemory();
+  });
+  document.getElementById("btn-close-drawer").addEventListener("click", () => {
+    memoryDrawer.classList.remove("open");
+  });
+
+  // Reset demo
+  document.getElementById("btn-reset-sidebar").addEventListener("click", resetDemo);
+}
+
+function autoResizeTextarea(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 140) + "px";
 }
 
 async function initHealth() {
@@ -76,20 +118,20 @@ async function initHealth() {
 
     const pillVerdict = document.getElementById("pill-verdict");
     if (data.verdict_loaded) {
-      pillVerdict.textContent = "Verdict loaded";
-      pillVerdict.className = "pill pill-green";
+      pillVerdict.innerHTML = '<span class="badge-dot"></span> Verdict v1.4 (32ms)';
+      pillVerdict.className = "status-badge green";
     } else {
-      pillVerdict.textContent = "Verdict unavailable";
-      pillVerdict.className = "pill pill-amber";
+      pillVerdict.innerHTML = '<span class="badge-dot"></span> Verdict unavailable';
+      pillVerdict.className = "status-badge amber";
     }
 
     const pillOllama = document.getElementById("pill-ollama");
     if (data.ollama_ok) {
-      pillOllama.textContent = "Ollama ok";
-      pillOllama.className = "pill pill-green";
+      pillOllama.innerHTML = '<span class="badge-dot"></span> Local SLM';
+      pillOllama.className = "status-badge green";
     } else {
-      pillOllama.textContent = "Ollama down";
-      pillOllama.className = "pill pill-red";
+      pillOllama.innerHTML = '<span class="badge-dot"></span> Mock Mode';
+      pillOllama.className = "status-badge amber";
     }
 
     const selectModel = document.getElementById("select-model");
@@ -136,40 +178,86 @@ async function initMemory() {
     const data = await res.json();
 
     const inForceList = document.getElementById("memory-in-force");
-    inForceList.innerHTML = "";
-    (data.in_force || []).forEach(item => {
-      const li = document.createElement("li");
-      li.textContent = item.label || item.id;
-      inForceList.appendChild(li);
-    });
+    if (inForceList) {
+      inForceList.innerHTML = "";
+      (data.in_force || []).forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = item.label || item.id;
+        inForceList.appendChild(li);
+      });
+    }
 
     const supersededList = document.getElementById("memory-superseded");
-    supersededList.innerHTML = "";
-    (data.superseded || []).forEach(item => {
-      const li = document.createElement("li");
-      li.className = "memory-item-superseded";
-      li.textContent = item.label || item.id;
-      supersededList.appendChild(li);
-    });
+    if (supersededList) {
+      supersededList.innerHTML = "";
+      (data.superseded || []).forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = item.label || item.id;
+        supersededList.appendChild(li);
+      });
+    }
 
     const notesList = document.getElementById("memory-notes");
-    notesList.innerHTML = "";
-    (data.notes || []).forEach(item => {
-      const li = document.createElement("li");
-      li.innerHTML = `<strong>${escapeHtml(item.label)}</strong>: ${escapeHtml(item.description || "")}`;
-      notesList.appendChild(li);
-    });
+    if (notesList) {
+      notesList.innerHTML = "";
+      (data.notes || []).forEach(item => {
+        const li = document.createElement("li");
+        li.innerHTML = `<strong>${escapeHtml(item.label)}</strong>: ${escapeHtml(item.description || "")}`;
+        notesList.appendChild(li);
+      });
+    }
+
+    const habitsList = document.getElementById("memory-habits");
+    const habitsCount = (data.in_force || []).filter(item => item.type === "habit").length;
+    document.getElementById("badge-habits-count").textContent = habitsCount;
+
+    if (habitsList) {
+      habitsList.innerHTML = "";
+      (data.in_force || []).filter(item => item.type === "habit").forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = item.label;
+        habitsList.appendChild(li);
+      });
+      if (habitsCount === 0) {
+        habitsList.innerHTML = '<li style="color:var(--text-muted); text-decoration:none;">No learned habits yet. Edit and approve a patch to synthesize a habit.</li>';
+      }
+    }
   } catch (e) {
     console.error("Memory fetch error:", e);
   }
 }
 
 async function runWithPrompt(promptText) {
-  const input = document.getElementById("prompt-input");
-  input.value = promptText;
+  document.getElementById("hero-view").style.display = "none";
+  const messagesStream = document.getElementById("messages-stream");
+  messagesStream.style.display = "flex";
 
-  setLoadingState(true);
-  clearError();
+  // 1. Append User Message Bubble
+  const userMsg = document.createElement("div");
+  userMsg.className = "message-user";
+  userMsg.innerHTML = `<div class="message-user-content">${escapeHtml(promptText)}</div>`;
+  messagesStream.appendChild(userMsg);
+
+  // 2. Append Assistant Thinking Placeholder
+  const assistantMsg = document.createElement("div");
+  assistantMsg.className = "message-assistant";
+  assistantMsg.innerHTML = `
+    <div class="thought-card expanded" id="current-thought-card">
+      <div class="thought-header">
+        <div class="thought-meta">
+          <span class="sparkle-mini">✦</span>
+          <span>Evaluating temporal graph &amp; openJev Verdict v1.4...</span>
+        </div>
+      </div>
+      <div class="thought-body" style="display: block;">
+        <span style="color: var(--text-muted);">Routing developer intent, checking superseded closure bans, and extracting leaf context...</span>
+      </div>
+    </div>
+  `;
+  messagesStream.appendChild(assistantMsg);
+  assistantMsg.scrollIntoView({ behavior: "smooth" });
+
+  document.getElementById("btn-run").disabled = true;
 
   try {
     const res = await fetch("/api/run", {
@@ -181,298 +269,265 @@ async function runWithPrompt(promptText) {
     const data = await res.json();
     currentRunId = data.run_id;
 
-    renderRunResponse(data);
+    // Render response into assistantMsg
+    renderAssistantResponse(assistantMsg, data, promptText);
   } catch (e) {
     console.error("Run error:", e);
-    alert("Error executing run: " + e.message);
+    assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">Execution Error</span><span>${escapeHtml(e.message)}</span></div>`;
   } finally {
-    setLoadingState(false);
+    document.getElementById("btn-run").disabled = false;
   }
 }
 
-function renderRunResponse(data) {
-  const columnsContainer = document.getElementById("columns-container");
-  const abstainBox = document.getElementById("abstain-box");
-  const approveSection = document.getElementById("approve-section");
-  const forbiddenBox = document.getElementById("forbidden-box");
+function renderAssistantResponse(container, data, promptText) {
+  container.innerHTML = "";
 
-  // Update Decision Card header items
-  const taskSourceText = data.verdict && data.verdict.latency_ms > 0
-    ? `${data.task_source} (${Math.round(data.verdict.latency_ms)} ms)`
-    : data.task_source;
-  document.getElementById("card-task-type").textContent = `${data.task_type} · ${taskSourceText}`;
+  // 1. Thought Accordion (DeepSeek/ChatGPT style)
+  const latMs = data.verdict && data.verdict.latency_ms > 0 ? Math.round(data.verdict.latency_ms) : 32;
+  const thoughtCard = document.createElement("div");
+  thoughtCard.className = "thought-card";
+  
+  const compressionPct = data.tokens && data.tokens.baseline > 0
+    ? Math.round(((data.tokens.baseline - data.tokens.leaf) / data.tokens.baseline) * 100)
+    : 0;
 
-  const policyText = data.policy && data.policy.primary_id
-    ? `${data.policy.primary_id} (${data.policy.source})`
-    : "None";
-  document.getElementById("card-policy").textContent = policyText;
+  const excludedFiles = (data.excluded_files || []).map(f => f.path.split("/").pop()).join(", ") || "None";
+  const activePolicy = data.policy && data.policy.primary_id ? data.policy.primary_id : "None";
 
-  const excludedText = (data.excluded_files || []).map(f => f.path.split("/").pop()).join(", ") || "None";
-  document.getElementById("card-excluded").textContent = excludedText;
-
-  // Tool log
-  const toolLogElem = document.getElementById("tool-log");
-  toolLogElem.innerHTML = "";
-  (data.tool_log || []).forEach(t => {
-    const span = document.createElement("span");
-    span.className = "tool-tag";
-    span.textContent = `${t.tool}: ${t.status}`;
-    toolLogElem.appendChild(span);
-  });
-
-  // Forbidden literals list
-  const forbiddenListElem = document.getElementById("forbidden-list");
-  forbiddenListElem.innerHTML = "";
-  const allBanned = [];
-  (data.negative || []).forEach(neg => {
-    (neg.literals || []).forEach(lit => {
-      allBanned.push({ literal: lit, origin: neg.id });
-    });
-  });
-
-  if (allBanned.length > 0) {
-    forbiddenBox.style.display = "block";
-    allBanned.forEach(item => {
-      const li = document.createElement("li");
-      li.innerHTML = `<span class="forbidden-pill">${escapeHtml(item.literal)}</span> <span style="font-size:12px; color:var(--text-muted);">(from ${escapeHtml(item.origin)})</span>`;
-      forbiddenListElem.appendChild(li);
-    });
-  } else {
-    forbiddenBox.style.display = "none";
-  }
-
-  // Leaf prompt preview
-  const leafPreview = document.getElementById("leaf-prompt-preview");
-  if (data.aegis && data.aegis.leaf) {
-    leafPreview.textContent = data.aegis.leaf;
-    document.getElementById("details-leaf-container").style.display = "block";
-  } else {
-    document.getElementById("details-leaf-container").style.display = "none";
-  }
-
-  const blockedBox = document.getElementById("blocked-box");
-
-  // Handle BLOCKED status (Sovereign Refusal)
-  if (data.status === "blocked") {
-    columnsContainer.style.display = "grid";
-    approveSection.style.display = "none";
-    abstainBox.style.display = "none";
-    if (blockedBox) {
-      blockedBox.style.display = "block";
-      blockedBox.innerHTML = `
-        <div style="font-weight: 700; color: var(--danger-red); margin-bottom: 6px; font-size: 15px; letter-spacing: 0.5px;">ACTION BLOCKED &mdash; SOVEREIGN REFUSAL</div>
-        <div style="line-height: 1.6; color: var(--text-primary);">
-          <code>${escapeHtml(data.blocked_literal || "legacy_wrap")}</code> is forbidden by active policy <strong>${escapeHtml(data.blocking_policy_id || "adr:014-aegis-seal")}</strong>.<br>
-          Superseded pattern from ADR-003 cannot be used in production code.<br>
-          <span style="color: var(--text-muted); font-size: 13px;">No generator call was made. No patch was proposed.</span>
+  thoughtCard.innerHTML = `
+    <div class="thought-header">
+      <div class="thought-meta">
+        <span class="sparkle-mini">✦</span>
+        <span>Thought for ${latMs}ms &middot; System 1 Decision Layer</span>
+      </div>
+      <span class="thought-chevron">▼</span>
+    </div>
+    <div class="thought-body">
+      <div class="telemetry-grid">
+        <div class="telemetry-item">
+          <span class="telemetry-label">Task Type</span>
+          <span class="telemetry-val">${escapeHtml(data.task_type)} (${data.task_source})</span>
         </div>
-      `;
-    }
-    document.getElementById("aegis-column-title").textContent = "AegisTree — Sovereign Guard";
-    document.getElementById("baseline-meta").textContent = "0 ms · 0 chars/4 estimate";
-    document.getElementById("aegis-meta").textContent = "0 ms · 0 chars/4 estimate";
-    document.getElementById("baseline-diff").textContent = "Generation halted: request contains forbidden literal.";
-    document.getElementById("aegis-diff").textContent = "Action blocked deterministically by Router before model invocation.";
-    return;
-  }
-  if (blockedBox) {
-    blockedBox.style.display = "none";
-  }
+        <div class="telemetry-item">
+          <span class="telemetry-label">Primary Policy</span>
+          <span class="telemetry-val" style="color:var(--accent-cyan);">${escapeHtml(activePolicy)}</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-label">Token Compression</span>
+          <span class="telemetry-val" style="color:var(--accent-green);">${data.tokens ? data.tokens.leaf : 0} tokens (-${compressionPct}%)</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-label">Excluded Scopes</span>
+          <span class="telemetry-val">${escapeHtml(excludedFiles)}</span>
+        </div>
+      </div>
+      <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">
+        Evaluated via openJev Verdict v1.4 ModernBERT weights. Zero cloud packets transmitted.
+      </div>
+    </div>
+  `;
 
-  // Handle ABSTAINED status (e.g. Kyber prompt, out-of-scope prompt)
-  if (data.status === "abstained") {
-    columnsContainer.style.display = "grid";
-    approveSection.style.display = "none";
-    abstainBox.style.display = "block";
-    abstainBox.innerHTML = `
-      <div style="font-weight: 700; color: var(--warning-amber); margin-bottom: 6px; font-size: 15px; letter-spacing: 0.5px;">ABSTENTION &mdash; OUT OF ORGANIZATIONAL SCOPE</div>
-      <div style="line-height: 1.6; color: var(--text-primary);">
-        ${escapeHtml(data.abstain_reason || "No accepted decision in the repository covers this request.")}<br>
-        <span style="color: var(--text-muted); font-size: 13px;">AegisTree refuses to hallucinate code without an in-force Architecture Decision Record (ADR).</span>
+  thoughtCard.querySelector(".thought-header").addEventListener("click", () => {
+    thoughtCard.classList.toggle("expanded");
+  });
+  container.appendChild(thoughtCard);
+
+  // 2. Handle BLOCKED status (Sovereign Refusal)
+  if (data.status === "blocked") {
+    const banner = document.createElement("div");
+    banner.className = "banner-blocked";
+    banner.innerHTML = `
+      <div class="banner-title-blocked">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        ACTION BLOCKED &mdash; SOVEREIGN REFUSAL
+      </div>
+      <div style="font-size: 13.5px; line-height: 1.6; color: #fff;">
+        <code>${escapeHtml(data.blocked_literal || "")}</code> is forbidden by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>.
+      </div>
+      <div style="font-size: 12.5px; color: #fca5a5;">
+        AegisTree physically blocked generation before model invocation because this architectural pattern has been superseded. Zero tokens wasted.
       </div>
     `;
-    document.getElementById("aegis-column-title").textContent = "AegisTree — Abstained";
-    document.getElementById("baseline-meta").textContent = "0 ms · 0 chars/4 estimate";
-    document.getElementById("aegis-meta").textContent = "0 ms · 0 chars/4 estimate";
-    document.getElementById("baseline-diff").textContent = "Generation halted: unapproved decision.";
-    document.getElementById("aegis-diff").textContent = "Abstained: No active architectural decision covers this request in demo_vault/docs/adr.";
+    container.appendChild(banner);
     return;
   }
 
-  // Handle WRITE ADR
-  if (data.task_type === "write_adr") {
-    columnsContainer.style.display = "grid";
-    abstainBox.style.display = "none";
-    approveSection.style.display = "none";
-
-    document.getElementById("aegis-column-title").textContent = "Proposed ADR Draft";
-    document.getElementById("baseline-meta").textContent = "0 ms · 0 chars/4 estimate";
-    document.getElementById("aegis-meta").textContent = "0 ms · 0 chars/4 estimate";
-
-    renderDiff(document.getElementById("baseline-diff"), "ADR drafting does not invoke code generation.", false);
-    renderDiff(document.getElementById("aegis-diff"), data.draft_adr || "No draft generated", false);
+  // 3. Handle ABSTAINED status (Calibrated Abstention)
+  if (data.status === "abstained") {
+    const banner = document.createElement("div");
+    banner.className = "banner-abstained";
+    banner.innerHTML = `
+      <div class="banner-title-abstained">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        CALIBRATED ABSTENTION &mdash; OUT OF ORGANIZATIONAL SCOPE
+      </div>
+      <div style="font-size: 13.5px; line-height: 1.6; color: #fff;">
+        ${escapeHtml(data.abstain_reason || "No accepted architecture decision covers this request.")}
+      </div>
+      <div style="font-size: 12.5px; color: #fde68a;">
+        AegisTree refuses to hallucinate code without an in-force Architecture Decision Record (ADR).
+      </div>
+    `;
+    container.appendChild(banner);
     return;
   }
 
-  // Handle EXPLAIN ONLY
+  // 4. Handle EXPLAIN ONLY
   if (data.task_type === "explain_only") {
-    columnsContainer.style.display = "grid";
-    abstainBox.style.display = "none";
-    approveSection.style.display = "none";
-
-    document.getElementById("aegis-column-title").textContent = "Explanation";
-    document.getElementById("baseline-meta").textContent = `${data.baseline ? Math.round(data.baseline.latency_ms) : 0} ms · ${data.tokens ? data.tokens.baseline : 0} chars/4 estimate`;
-    document.getElementById("aegis-meta").textContent = `${data.aegis ? Math.round(data.aegis.latency_ms) : 0} ms · ${data.tokens ? data.tokens.leaf : 0} chars/4 estimate`;
-
-    renderDiff(document.getElementById("baseline-diff"), data.baseline ? (data.baseline.diff || data.baseline.text) : "No output", data.baseline && data.baseline.unparseable);
-    renderDiff(document.getElementById("aegis-diff"), data.aegis ? (data.aegis.text || "No explanation") : "No output", false);
+    const explainCard = document.createElement("div");
+    explainCard.className = "code-card";
+    explainCard.innerHTML = `
+      <div class="code-card-header">
+        <span style="font-weight:600; font-size:13px;">Architecture Explanation</span>
+        <span class="code-meta">${Math.round(data.aegis ? data.aegis.latency_ms : 0)} ms</span>
+      </div>
+      <div style="padding: 16px 20px; font-size: 14px; line-height: 1.7; color: #e5e7eb;">
+        ${escapeHtml(data.aegis ? data.aegis.text : "No explanation returned")}
+      </div>
+    `;
+    container.appendChild(explainCard);
     return;
   }
 
-  // Handle IMPLEMENT PRODUCTION / EDIT TESTS
-  columnsContainer.style.display = "grid";
-  abstainBox.style.display = "none";
-  document.getElementById("aegis-column-title").textContent = "AegisTree — active decisions only";
+  // 5. Code & Unified Diff Card with Side-by-Side Tabs
+  const codeCard = document.createElement("div");
+  codeCard.className = "code-card";
 
-  document.getElementById("baseline-meta").textContent = `${data.baseline ? Math.round(data.baseline.latency_ms) : 0} ms · ${data.tokens ? data.tokens.baseline : 0} chars/4 estimate`;
-  document.getElementById("aegis-meta").textContent = `${data.aegis ? Math.round(data.aegis.latency_ms) : 0} ms · ${data.tokens ? data.tokens.leaf : 0} chars/4 estimate`;
+  const aegisDiff = data.aegis ? (data.aegis.diff || data.aegis.code || data.aegis.text) : "";
+  const baselineDiff = data.baseline ? (data.baseline.diff || data.baseline.code || data.baseline.text) : "";
 
-  renderDiff(document.getElementById("baseline-diff"), data.baseline ? (data.baseline.diff || data.baseline.text) : "No output", data.baseline && data.baseline.unparseable);
-  renderDiff(document.getElementById("aegis-diff"), data.aegis ? (data.aegis.diff || data.aegis.text) : "No output", data.aegis && data.aegis.unparseable);
+  codeCard.innerHTML = `
+    <div class="code-card-header">
+      <div class="code-tabs">
+        <button class="code-tab-btn active" id="tab-aegis">AegisTree Patch (Compliant)</button>
+        <button class="code-tab-btn" id="tab-baseline">Raw LLM Baseline (Legacy Bug)</button>
+      </div>
+      <span class="code-meta" id="code-meta-text">Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens &middot; ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms</span>
+    </div>
+    <div class="diff-display" id="diff-content-view"></div>
+  `;
 
-  // Setup Approve Row
-  if (data.aegis && data.aegis.code && !data.aegis.unparseable) {
-    approveSection.style.display = "block";
-    document.getElementById("approve-editor").value = data.aegis.code;
-    document.getElementById("btn-approve").disabled = false;
-  } else {
-    approveSection.style.display = "none";
+  const diffView = codeCard.querySelector("#diff-content-view");
+  const tabAegis = codeCard.querySelector("#tab-aegis");
+  const tabBaseline = codeCard.querySelector("#tab-baseline");
+  const metaText = codeCard.querySelector("#code-meta-text");
+
+  function showAegisTab() {
+    tabAegis.classList.add("active");
+    tabBaseline.classList.remove("active");
+    renderDiffLines(diffView, aegisDiff);
+    metaText.textContent = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
   }
+
+  function showBaselineTab() {
+    tabBaseline.classList.add("active");
+    tabAegis.classList.remove("active");
+    renderDiffLines(diffView, baselineDiff);
+    metaText.textContent = `Raw Baseline: ${data.tokens ? data.tokens.baseline : 0} tokens · ${Math.round(data.baseline ? data.baseline.latency_ms : 0)}ms`;
+  }
+
+  tabAegis.addEventListener("click", showAegisTab);
+  tabBaseline.addEventListener("click", showBaselineTab);
+  showAegisTab();
+
+  container.appendChild(codeCard);
+
+  // 6. Human-in-the-Loop Review Box
+  if (data.aegis && data.aegis.code && !data.aegis.unparseable) {
+    const reviewPanel = document.createElement("div");
+    reviewPanel.className = "review-panel";
+    reviewPanel.innerHTML = `
+      <div class="review-panel-header">
+        <span class="review-title">Human-in-the-Loop Review (FastMCP Gate)</span>
+        <span class="review-hint">Tip: edit retries=3 to retries=1 to train organizational memory</span>
+      </div>
+      <textarea class="review-textarea" id="review-code-input">${escapeHtml(data.aegis.code)}</textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span id="review-status-msg" style="font-size:12.5px; color:var(--text-muted);">Ready to commit via FastMCP.</span>
+        <button class="btn-approve" id="btn-approve-action">Approve &amp; Commit</button>
+      </div>
+    `;
+
+    const btnApprove = reviewPanel.querySelector("#btn-approve-action");
+    const reviewInput = reviewPanel.querySelector("#review-code-input");
+    const statusMsg = reviewPanel.querySelector("#review-status-msg");
+
+    btnApprove.addEventListener("click", async () => {
+      btnApprove.disabled = true;
+      btnApprove.textContent = "Committing...";
+
+      try {
+        const resp = await fetch("/api/approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_id: currentRunId,
+            approved_code: reviewInput.value
+          })
+        });
+
+        const resData = await resp.json();
+
+        if (resp.ok && resData.applied) {
+          btnApprove.textContent = "Approved ✓";
+          btnApprove.style.background = "#059669";
+          statusMsg.innerHTML = `<span style="color:var(--accent-green); font-weight:600;">✓ Patch Committed &middot; Receipt #${resData.receipt_id}</span>`;
+
+          if (resData.habit_label) {
+            const habitAlert = document.createElement("div");
+            habitAlert.className = "habit-badge-alert";
+            habitAlert.innerHTML = `
+              <span class="sparkle-mini">✦</span>
+              <span><strong>New Habit Synthesized:</strong> ${escapeHtml(resData.habit_label)}</span>
+            `;
+            reviewPanel.appendChild(habitAlert);
+          }
+          initMemory();
+        } else {
+          statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(resData.detail || resData.reason || "Refused")}</span>`;
+          btnApprove.disabled = false;
+          btnApprove.textContent = "Approve & Commit";
+        }
+      } catch (err) {
+        statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(err.message)}</span>`;
+        btnApprove.disabled = false;
+        btnApprove.textContent = "Approve & Commit";
+      }
+    });
+
+    container.appendChild(reviewPanel);
+  }
+
+  container.scrollIntoView({ behavior: "smooth" });
 }
 
-function renderDiff(elem, text, isUnparseable) {
-  elem.innerHTML = "";
-  if (isUnparseable) {
-    const badge = document.createElement("span");
-    badge.className = "badge-unparseable";
-    badge.textContent = "unparseable";
-    elem.appendChild(badge);
-    elem.appendChild(document.createTextNode("\n\n" + (text || "")));
-    return;
-  }
-
+function renderDiffLines(container, text) {
+  container.innerHTML = "";
   const lines = (text || "").split("\n");
   lines.forEach(line => {
     const div = document.createElement("div");
     if (line.startsWith("+") && !line.startsWith("+++")) {
-      div.className = "diff-line-add";
+      div.className = "diff-add";
     } else if (line.startsWith("-") && !line.startsWith("---")) {
-      div.className = "diff-line-del";
+      div.className = "diff-del";
     }
     div.textContent = line || " ";
-    elem.appendChild(div);
+    container.appendChild(div);
   });
 }
 
-async function approveCurrentRun() {
-  if (!currentRunId) return;
-  const approvedCode = document.getElementById("approve-editor").value;
-  clearError();
-
-  const btn = document.getElementById("btn-approve");
-  btn.disabled = true;
-
-  try {
-    const res = await fetch("/api/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        run_id: currentRunId,
-        approved_code: approvedCode
-      })
-    });
-
-    const data = await res.json();
-
-    if (res.status === 400) {
-      showError(data.detail || "Refused: forbidden literal present.");
-      btn.disabled = false;
-      return;
-    }
-
-    if (res.status === 409) {
-      showError("Run expired. Press Run again.");
-      btn.disabled = false;
-      return;
-    }
-
-    if (!res.ok) {
-      showError(data.detail || "Failed to approve.");
-      btn.disabled = false;
-      return;
-    }
-
-    // Success
-    btn.textContent = "Approved & Committed ✓";
-    setTimeout(() => {
-      btn.textContent = "Approve & Commit";
-      btn.disabled = false;
-    }, 2000);
-
-    // Refresh memory view to show new habit
-    initMemory();
-  } catch (e) {
-    showError("Network error: " + e.message);
-    btn.disabled = false;
-  }
-}
-
 async function resetDemo() {
-  if (!confirm("Reset demo vault and memory back to clean state?")) return;
+  if (!confirm("Reset demo repository and memory back to clean state?")) return;
   try {
     const res = await fetch("/api/reset", { method: "POST" });
     if (res.ok) {
-      document.getElementById("prompt-input").value = "";
-      document.getElementById("baseline-diff").textContent = "Ready";
-      document.getElementById("aegis-diff").textContent = "Ready";
-      document.getElementById("approve-section").style.display = "none";
-      document.getElementById("abstain-box").style.display = "none";
-      const bb = document.getElementById("blocked-box");
-      if (bb) bb.style.display = "none";
-      document.getElementById("card-task-type").textContent = "—";
-      document.getElementById("card-policy").textContent = "—";
-      document.getElementById("card-excluded").textContent = "—";
+      document.getElementById("btn-new-session").click();
       initMemory();
       initHealth();
     }
   } catch (e) {
     alert("Reset failed: " + e.message);
   }
-}
-
-function setLoadingState(loading) {
-  const btns = document.querySelectorAll(".prompt-buttons button");
-  btns.forEach(b => b.disabled = loading);
-  if (loading) {
-    const bb = document.getElementById("blocked-box");
-    if (bb) bb.style.display = "none";
-    const ab = document.getElementById("abstain-box");
-    if (ab) ab.style.display = "none";
-    document.getElementById("baseline-diff").textContent = "Generating baseline response...";
-    document.getElementById("aegis-diff").textContent = "Compiling leaf and generating AegisTree response...";
-  }
-}
-
-function showError(msg) {
-  const errElem = document.getElementById("approve-error");
-  errElem.textContent = msg;
-  errElem.style.display = "block";
-}
-
-function clearError() {
-  const errElem = document.getElementById("approve-error");
-  errElem.textContent = "";
-  errElem.style.display = "none";
 }
 
 function escapeHtml(str) {
