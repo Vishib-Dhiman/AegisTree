@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AegisTree — Sovereign AI Second Brain</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- 1. Top Bar -->
+  <header class="top-bar">
+    <div class="brand-section">
+      <h1 class="brand-title">AegisTree</h1>
+      <span class="brand-subtitle">Northwind session vault</span>
+    </div>
+    <div class="pills-section">
+      <span id="pill-verdict" class="pill pill-green">Verdict loaded</span>
+      <span id="pill-ollama" class="pill pill-red">Ollama down</span>
+      <select id="select-model" class="pill pill-model-select" title="Switch System 2 Local Model">
+        <option value="qwen2.5-coder:3b">Qwen 2.5 Coder 3B (1.9 GB)</option>
+        <option value="qwen2.5-coder:7b">Qwen 2.5 Coder 7B (4.7 GB)</option>
+        <option value="deepseek-r1:7b">DeepSeek R1 7B (4.7 GB)</option>
+        <option value="deepseek-r1:8b">DeepSeek R1 8B (4.9 GB)</option>
+        <option value="deepseek-r1:14b">DeepSeek R1 14B (9.0 GB)</option>
+        <option value="llama3.1:8b">Llama 3.1 8B (4.9 GB)</option>
+        <option value="mock-offline-fast">Mock Engine (Fast Dry-Run)</option>
+      </select>
+      <span class="pill">127.0.0.1 only</span>
+      <span class="pill">Offline enforced</span>
+    </div>
+  </header>
+
+  <!-- 2. Prompt Controls -->
+  <section class="prompt-section">
+    <textarea id="prompt-input" class="prompt-textarea" placeholder="Enter instructions or click a rehearsed domain button below..."></textarea>
+    <div class="prompt-buttons">
+      <div class="rehearsed-group" style="flex-wrap: wrap; gap: 6px;">
+        <button id="btn-run" class="btn btn-primary" type="button" style="font-weight: 700; background: var(--accent-green); color: #101418;">Run</button>
+        <!-- Vault -->
+        <button id="btn-persist" class="btn" type="button" title="Vault Standard: ADR-014 aegis_seal">Persist token</button>
+        <button id="btn-rotate" class="btn" type="button" title="Habit formation: retries=1">Rotate token</button>
+        <button id="btn-force-legacy" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: legacy_wrap blocked">Force legacy</button>
+        <!-- PyCA Cryptography -->
+        <button id="btn-pyca-oaep" class="btn" type="button" style="border: 1px solid var(--accent-blue);" title="PyCA: ADR-021 OAEP RSA encryption">PyCA OAEP</button>
+        <button id="btn-pyca-pkcs" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: PKCS1v15 blocked">PyCA Force PKCS1</button>
+        <!-- Pydantic -->
+        <button id="btn-pydantic-v2" class="btn" type="button" style="border: 1px solid var(--accent-blue);" title="Pydantic: ADR-032 model_dump">Pydantic v2 Dump</button>
+        <button id="btn-pydantic-v1" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: .dict() blocked">Pydantic Force .dict()</button>
+        <!-- Database / SQLAlchemy -->
+        <button id="btn-db-sqlalchemy" class="btn" type="button" style="border: 1px solid var(--accent-blue);" title="DB: ADR-045 session.execute(select)">SQLAlchemy 2.0</button>
+        <button id="btn-db-engine" class="btn" type="button" style="border: 1px solid var(--danger-red); color: var(--danger-red);" title="Refusal: engine.execute blocked">SQL Force engine.exec</button>
+        <!-- Governance -->
+        <button id="btn-explain" class="btn" type="button">Explain</button>
+        <button id="btn-kyber" class="btn" type="button">Kyber (Abstain)</button>
+      </div>
+      <div>
+        <button id="btn-reset" class="btn btn-danger" type="button">Reset demo</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. Two Columns: Baseline vs AegisTree -->
+  <section id="columns-container" class="columns-grid">
+    <div class="column-card">
+      <div class="column-header">
+        <span class="column-title">Baseline — full repository</span>
+        <span id="baseline-meta" class="column-meta">0 ms · 0 chars/4 estimate</span>
+      </div>
+      <pre id="baseline-diff" class="diff-viewport">Ready</pre>
+    </div>
+
+    <div class="column-card">
+      <div class="column-header">
+        <span id="aegis-column-title" class="column-title">AegisTree — active decisions only</span>
+        <span id="aegis-meta" class="column-meta">0 ms · 0 chars/4 estimate</span>
+      </div>
+      <pre id="aegis-diff" class="diff-viewport">Ready</pre>
+    </div>
+  </section>
+
+  <!-- 4. Decision Card -->
+  <section class="decision-card">
+    <div class="decision-grid">
+      <div>
+        <div class="decision-item-label">Task Type</div>
+        <div id="card-task-type" class="decision-item-val">—</div>
+      </div>
+      <div>
+        <div class="decision-item-label">Primary Policy</div>
+        <div id="card-policy" class="decision-item-val">—</div>
+      </div>
+      <div>
+        <div class="decision-item-label">Excluded Scopes</div>
+        <div id="card-excluded" class="decision-item-val">—</div>
+      </div>
+    </div>
+
+    <div id="abstain-box" class="abstain-banner" style="display: none;"></div>
+    <div id="blocked-box" class="blocked-banner" style="display: none;"></div>
+
+    <div id="forbidden-box" class="forbidden-container">
+      <div class="forbidden-header">Forbidden in Production (Attributed to ADR-003)</div>
+      <ul id="forbidden-list" class="forbidden-list">
+        <li><span class="forbidden-pill">legacy_wrap</span></li>
+        <li><span class="forbidden-pill">kek-2024</span></li>
+        <li><span class="forbidden-pill">timeout_s=30</span></li>
+      </ul>
+    </div>
+
+    <div class="tool-log-container">
+      <span style="font-weight: 500;">Tools:</span>
+      <div id="tool-log" style="display: flex; gap: 8px;">
+        <span class="tool-tag">search_decisions: idle</span>
+      </div>
+    </div>
+
+    <details id="details-leaf-container" class="details-leaf">
+      <summary>View Compiled Leaf Prompt</summary>
+      <pre id="leaf-prompt-preview"></pre>
+    </details>
+  </section>
+
+  <!-- 5. Approve Row -->
+  <section id="approve-section" class="approve-section">
+    <div class="approve-header">
+      <span style="font-weight: 600; font-size: 15px;">Human-in-the-Loop Review</span>
+      <span class="approve-hint">Rehearsed edit: change retries=3 to retries=1, then approve.</span>
+    </div>
+    <div id="approve-error" class="approve-error"></div>
+    <textarea id="approve-editor" class="approve-textarea"></textarea>
+    <button id="btn-approve" class="btn btn-primary" type="button">Approve &amp; Commit</button>
+  </section>
+
+  <!-- 6. Memory View -->
+  <section class="memory-section">
+    <div class="memory-title">Temporal Memory Graph (Data &rarr; Knowledge &rarr; Memory &rarr; Reasoning &rarr; Action)</div>
+    <div class="memory-columns">
+      <div>
+        <div class="memory-group-title">In Force (Decisions &amp; Habits)</div>
+        <ul id="memory-in-force" class="memory-list"></ul>
+      </div>
+      <div>
+        <div class="memory-group-title">Superseded (Closure Bans)</div>
+        <ul id="memory-superseded" class="memory-list"></ul>
+      </div>
+      <div>
+        <div class="memory-group-title">Team Knowledge (Second Brain)</div>
+        <ul id="memory-notes" class="memory-list"></ul>
+      </div>
+    </div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
