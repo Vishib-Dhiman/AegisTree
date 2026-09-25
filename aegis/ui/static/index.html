@@ -8,6 +8,72 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+  <style>
+    /* In-Flow Layout Overrides: Guarantees no overlay/occlusion regardless of CSS cache */
+    .app-layout {
+      display: flex !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      position: relative !important;
+      overflow: hidden !important;
+    }
+    .main-content {
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100vh !important;
+      min-height: 0 !important;
+      min-width: 0 !important;
+      overflow: hidden !important;
+      position: relative !important;
+      flex: 1 1 0% !important;
+    }
+    .top-nav {
+      flex-shrink: 0 !important;
+      height: 56px !important;
+    }
+    .chat-viewport {
+      flex: 1 1 0% !important;
+      min-height: 0 !important;
+      width: 100% !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      padding: 24px 20px 32px !important;
+      scroll-behavior: smooth !important;
+      scrollbar-width: thin !important;
+      scrollbar-color: rgba(255, 255, 255, 0.3) transparent !important;
+      -webkit-overflow-scrolling: touch !important;
+    }
+    .chat-viewport::-webkit-scrollbar {
+      width: 8px !important;
+      display: block !important;
+    }
+    .chat-viewport::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3) !important;
+      border-radius: 4px !important;
+    }
+    .input-area {
+      position: relative !important;
+      bottom: auto !important;
+      left: auto !important;
+      right: auto !important;
+      flex-shrink: 0 !important;
+      width: 100% !important;
+      padding: 12px 24px 16px !important;
+      background: rgba(13, 15, 18, 0.98) !important;
+      border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      pointer-events: auto !important;
+      z-index: 15 !important;
+    }
+    .input-capsule {
+      max-width: 740px !important;
+      width: 100% !important;
+      border-radius: 18px !important;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+    }
+  </style>
 </head>
 <body class="dark-theme">
 

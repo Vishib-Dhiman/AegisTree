@@ -57,6 +57,14 @@ generator = MockGenerator(config=config) if config.system2_provider == "mock" el
 
 app = FastAPI(title="AegisTree Sovereign Second Brain")
 
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 # Run cache for human-in-the-loop review
 runs_cache: Dict[str, Dict[str, Any]] = {}
 
