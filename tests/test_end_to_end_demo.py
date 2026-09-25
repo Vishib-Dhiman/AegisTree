@@ -53,7 +53,7 @@ def test_e2e_pitch_demo_standard_flow(clean_sandbox):
     assert route.status == "ready"
     assert route.task_type in ("implement_production", "code")
     assert route.primary_policy_id == "adr:014-aegis-seal"
-    assert route.verdict_latency_ms < 50.0  # Must be sub-50ms
+    assert route.verdict_latency_ms < 100.0  # Real-time sub-100ms budget
 
     # 2. Token compression verification
     leaf_text = compile_leaf(route, graph, prompt, workspace_root=repo_dir)

@@ -255,7 +255,7 @@ async function runWithPrompt(promptText) {
     </div>
   `;
   messagesStream.appendChild(assistantMsg);
-  assistantMsg.scrollIntoView({ behavior: "smooth" });
+  scrollToBottom(true);
 
   document.getElementById("btn-run").disabled = true;
 
@@ -452,6 +452,16 @@ function renderAssistantResponse(container, data, promptText) {
     const reviewInput = reviewPanel.querySelector("#review-code-input");
     const statusMsg = reviewPanel.querySelector("#review-status-msg");
 
+    // Auto-resize review textarea to prevent awkward nested scroll capture
+    setTimeout(() => {
+      reviewInput.style.height = "auto";
+      reviewInput.style.height = Math.max(90, reviewInput.scrollHeight + 8) + "px";
+    }, 20);
+    reviewInput.addEventListener("input", () => {
+      reviewInput.style.height = "auto";
+      reviewInput.style.height = Math.max(90, reviewInput.scrollHeight + 8) + "px";
+    });
+
     btnApprove.addEventListener("click", async () => {
       btnApprove.disabled = true;
       btnApprove.textContent = "Committing...";
@@ -481,6 +491,7 @@ function renderAssistantResponse(container, data, promptText) {
               <span><strong>New Habit Synthesized:</strong> ${escapeHtml(resData.habit_label)}</span>
             `;
             reviewPanel.appendChild(habitAlert);
+            scrollToBottom(true);
           }
           initMemory();
         } else {
@@ -498,7 +509,18 @@ function renderAssistantResponse(container, data, promptText) {
     container.appendChild(reviewPanel);
   }
 
-  container.scrollIntoView({ behavior: "smooth" });
+  scrollToBottom(true);
+}
+
+function scrollToBottom(smooth = true) {
+  const viewport = document.getElementById("chat-viewport");
+  if (!viewport) return;
+  setTimeout(() => {
+    viewport.scrollTo({
+      top: viewport.scrollHeight,
+      behavior: smooth ? "smooth" : "auto"
+    });
+  }, 40);
 }
 
 function renderDiffLines(container, text) {
