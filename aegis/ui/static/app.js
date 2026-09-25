@@ -238,19 +238,56 @@ async function runWithPrompt(promptText) {
   userMsg.innerHTML = `<div class="message-user-content">${escapeHtml(promptText)}</div>`;
   messagesStream.appendChild(userMsg);
 
-  // 2. Append Assistant Thinking Placeholder
+  // 2. Append Animated Assistant Thinking & Shimmering Code Skeleton
   const assistantMsg = document.createElement("div");
   assistantMsg.className = "message-assistant";
+  
+  const startTime = Date.now();
   assistantMsg.innerHTML = `
-    <div class="thought-card expanded" id="current-thought-card">
+    <div class="thought-card expanded generating" id="current-thought-card">
       <div class="thought-header">
         <div class="thought-meta">
-          <span class="sparkle-mini">✦</span>
-          <span>Evaluating temporal graph &amp; openJev Verdict v1.4...</span>
+          <span class="spinner-orb"></span>
+          <span id="loader-phase-title">Evaluating temporal graph with openJev Verdict v1.4...</span>
         </div>
+        <span class="loading-timer" id="loader-timer">0.0s</span>
       </div>
       <div class="thought-body" style="display: block;">
-        <span style="color: var(--text-muted);">Routing developer intent, checking superseded closure bans, and extracting leaf context...</span>
+        <div id="loader-steps-list" style="display: flex; flex-direction: column; gap: 7px; font-size: 12.5px;">
+          <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-cyan);" id="loader-step-row-1">
+            <span class="sparkle-mini">✦</span>
+            <span>System 1 (openJev ModernBERT): routing intent to leaf context...</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; color: var(--text-muted);" id="loader-step-row-2">
+            <span>○</span>
+            <span>Checking bi-temporal graph &amp; superseded ADR closure bans...</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; color: var(--text-muted);" id="loader-step-row-3">
+            <span>○</span>
+            <span>Loading local SLM weights into memory &amp; generating compliant patch...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shimmering Code Skeleton -->
+    <div class="skeleton-card" id="current-skeleton-card">
+      <div class="skeleton-header">
+        <div class="skeleton-status-text">
+          <span class="pulse-dot"></span>
+          <span id="skeleton-status-label">Synthesizing Compliant Architecture Patch</span>
+        </div>
+        <span class="skeleton-subtext">Unified Memory Engine Active</span>
+      </div>
+      <div class="skeleton-code-container">
+        <div class="skeleton-shimmer-bar" style="width: 48%;"></div>
+        <div class="skeleton-shimmer-bar" style="width: 78%; margin-left: 20px;"></div>
+        <div class="skeleton-shimmer-bar" style="width: 92%; margin-left: 20px;"></div>
+        <div class="skeleton-shimmer-bar" style="width: 65%; margin-left: 20px;"></div>
+        <div class="skeleton-shimmer-bar" style="width: 38%; margin-left: 20px;"></div>
+        <div class="skeleton-cursor-line">
+          <span class="typing-cursor"></span>
+        </div>
       </div>
     </div>
   `;
@@ -258,6 +295,30 @@ async function runWithPrompt(promptText) {
   scrollToBottom(true);
 
   document.getElementById("btn-run").disabled = true;
+
+  // Live stopwatch and phase transition ticker
+  const timerInterval = setInterval(() => {
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+    const timerEl = document.getElementById("loader-timer");
+    if (timerEl) timerEl.textContent = elapsedSec + "s";
+
+    const elapsedNum = parseFloat(elapsedSec);
+    const step2 = document.getElementById("loader-step-row-2");
+    const step3 = document.getElementById("loader-step-row-3");
+    const phaseTitle = document.getElementById("loader-phase-title");
+    const skeletonLabel = document.getElementById("skeleton-status-label");
+
+    if (elapsedNum >= 0.4 && step2) {
+      step2.style.color = "var(--accent-green)";
+      step2.firstElementChild.textContent = "✓";
+    }
+    if (elapsedNum >= 1.2 && step3) {
+      step3.style.color = "var(--accent-cyan)";
+      step3.firstElementChild.className = "spinner-orb-mini";
+      if (phaseTitle) phaseTitle.textContent = "Loading SLM weights & generating patch...";
+      if (skeletonLabel) skeletonLabel.textContent = "Streaming tokens via local SLM...";
+    }
+  }, 100);
 
   try {
     const res = await fetch("/api/run", {
@@ -275,6 +336,7 @@ async function runWithPrompt(promptText) {
     console.error("Run error:", e);
     assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">Execution Error</span><span>${escapeHtml(e.message)}</span></div>`;
   } finally {
+    clearInterval(timerInterval);
     document.getElementById("btn-run").disabled = false;
   }
 }
