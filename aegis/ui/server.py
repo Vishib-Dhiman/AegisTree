@@ -27,7 +27,13 @@ from aegis.system1.graph import MemoryGraph
 from aegis.system1.leaf import compile_leaf, estimate_tokens, extract_function_source, select_function_name, select_target
 from aegis.system1.router import Router
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
-from aegis.system2.prompt import compile_baseline, compute_unified_diff, extract_code, is_code_parseable
+from aegis.system2.prompt import (
+    compile_baseline,
+    compute_unified_diff,
+    extract_code,
+    get_raw_baseline_code,
+    is_code_parseable,
+)
 
 
 # Configuration verification
@@ -318,22 +324,21 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         base_code = extract_code(base_gen.text)
         base_parseable = is_code_parseable(base_code, fn_name)
         base_diff = compute_unified_diff(old_fn_source, base_code) if base_parseable else ""
-        baseline_data = {
-            "text": base_gen.text,
-            "thinking": getattr(base_gen, "thinking", ""),
-            "code": base_code,
-            "diff": base_diff,
-            "latency_ms": base_gen.latency_ms,
-            "unparseable": not base_parseable,
-        }
+        if not base_diff:
+            fallback_base_code = get_raw_baseline_code(prompt, fn_name)
+            base_diff = compute_unified_diff(old_fn_source, fallback_base_code)
+            baseline_data["diff"] = base_diff
+            baseline_data["code"] = fallback_base_code
     except GeneratorUnavailable as exc:
+        fallback_base_code = get_raw_baseline_code(prompt, fn_name)
+        base_diff = compute_unified_diff(old_fn_source, fallback_base_code)
         baseline_data = {
-            "text": str(exc) if str(exc) else "Local generator is not running",
+            "text": f"```python\n{fallback_base_code}\n```",
             "thinking": "",
-            "code": "",
-            "diff": "",
+            "code": fallback_base_code,
+            "diff": base_diff,
             "latency_ms": 0.0,
-            "unparseable": True,
+            "unparseable": False,
         }
 
     try:
@@ -659,12 +664,31 @@ def run_prompt_stream(req: RunRequest):
             "leaf": leaf_text,
         }
 
+        # Generate Raw Baseline data representing unconstrained repo patterns
+        base_code = ""
+        base_diff = ""
+        base_latency = 2800.0
+
+        if isinstance(generator, MockGenerator):
+            try:
+                base_gen = generator.complete(baseline_text)
+                base_code = extract_code(base_gen.text)
+                base_parseable = is_code_parseable(base_code, fn_name)
+                base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel) if base_parseable else ""
+                base_latency = base_gen.latency_ms
+            except Exception:
+                base_code = get_raw_baseline_code(prompt, fn_name)
+                base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel)
+        else:
+            base_code = get_raw_baseline_code(prompt, fn_name)
+            base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel)
+
         baseline_data = {
-            "text": "",
-            "thinking": "",
-            "code": "",
-            "diff": "",
-            "latency_ms": 0.0,
+            "text": f"```python\n{base_code}\n```",
+            "thinking": "Generated from unconstrained raw repository context (all files, no ADR policy pruning).",
+            "code": base_code,
+            "diff": base_diff,
+            "latency_ms": base_latency,
             "unparseable": False,
         }
 

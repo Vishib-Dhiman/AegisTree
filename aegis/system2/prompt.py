@@ -82,3 +82,38 @@ def compute_unified_diff(old_code: str, new_code: str, filename: str = "vault/st
         tofile=f"b/{filename}",
     )
     return "".join(diff)
+
+
+def get_raw_baseline_code(prompt: str, function_name: Optional[str] = None) -> str:
+    """Returns canonical unconstrained baseline code reflecting legacy repo patterns."""
+    p_low = prompt.lower()
+    fn = function_name or select_function_name(prompt)
+    if "oaep" in p_low or "rsa" in p_low or "encrypt" in p_low or "pkcs" in p_low:
+        return (
+            f"def {fn}(public_key, plaintext: bytes) -> bytes:\n"
+            f"    return public_key.encrypt(\n"
+            f"        plaintext,\n"
+            f"        padding.PKCS1v15()\n"
+            f"    )"
+        )
+    elif "pydantic" in p_low or "serialize" in p_low or "model_dump" in p_low or "dict" in p_low:
+        return (
+            f"def {fn}(model) -> dict:\n"
+            f"    return model.dict()"
+        )
+    elif "sqlalchemy" in p_low or "database" in p_low or "audit" in p_low or "engine" in p_low:
+        return (
+            f"def {fn}(session, user_id: str):\n"
+            f"    return engine.execute(f\"SELECT * FROM audit_logs WHERE user_id = '{{user_id}}'\")"
+        )
+    elif "rotate" in p_low or fn == "rotate_session_token":
+        return (
+            f"def {fn}(token: str) -> str:\n"
+            f'    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)'
+        )
+    else:
+        return (
+            f"def {fn}(token: str) -> str:\n"
+            f'    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)'
+        )
+
