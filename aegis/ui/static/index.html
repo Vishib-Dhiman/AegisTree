@@ -112,7 +112,10 @@
       </div>
 
       <div class="sidebar-scrollable">
-        <div class="sidebar-section-title" id="threads-section-title" style="display: none;">Recent Tasks</div>
+        <div class="sidebar-section-title" id="threads-section-title" style="display: none; justify-content: space-between; align-items: center;">
+          <span>Recent Tasks</span>
+          <button id="btn-clear-threads" class="btn-clear-tasks-link" title="Clear all recent tasks">Clear</button>
+        </div>
         <div class="threads-list" id="threads-list"></div>
 
         <div class="sidebar-section-title">Rehearsed Pitch Scenarios</div>
@@ -165,14 +168,20 @@
       </div>
 
       <div class="sidebar-footer">
+        <div class="sidebar-reset-container">
+          <button id="btn-reset-demo" class="btn-reset-full" title="Completely reset demo to original settings (deletes recent chats & memory graphs)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            <span>Reset Demo to Original</span>
+          </button>
+        </div>
         <div class="user-profile">
           <div class="user-avatar">VD</div>
           <div class="user-info">
             <span class="user-name">Vishib</span>
             <span class="user-status">100% Air-Gapped (127.0.0.1)</span>
           </div>
+          <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo Repository">Reset</button>
         </div>
-        <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo Repository">Reset</button>
       </div>
     </aside>
 
@@ -322,7 +331,10 @@
           <h2 class="drawer-title">Temporal Memory Graph</h2>
           <span class="drawer-subtitle">Bi-temporal lineage &middot; valid_from &middot; deprecated_at</span>
         </div>
-        <button id="btn-close-drawer" class="icon-btn-ghost">&times;</button>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button id="btn-reset-drawer" class="btn-xs-danger" title="Reset all ADRs, habits, and memory graph to original defaults">Reset Graph</button>
+          <button id="btn-close-drawer" class="icon-btn-ghost">&times;</button>
+        </div>
       </div>
 
       <div class="drawer-content">
@@ -425,6 +437,6 @@
 
   </div>
 
-  <script src="app.js?v=2.2"></script>
+  <script src="app.js?v=2.3"></script>
 </body>
 </html>

@@ -141,7 +141,17 @@ function initEventListeners() {
   });
 
   // Reset demo
-  document.getElementById("btn-reset-sidebar").addEventListener("click", resetDemo);
+  const btnResetSidebar = document.getElementById("btn-reset-sidebar");
+  if (btnResetSidebar) btnResetSidebar.addEventListener("click", resetDemo);
+
+  const btnResetDemo = document.getElementById("btn-reset-demo");
+  if (btnResetDemo) btnResetDemo.addEventListener("click", resetDemo);
+
+  const btnResetDrawer = document.getElementById("btn-reset-drawer");
+  if (btnResetDrawer) btnResetDrawer.addEventListener("click", resetDemo);
+
+  const btnClearThreads = document.getElementById("btn-clear-threads");
+  if (btnClearThreads) btnClearThreads.addEventListener("click", clearRecentTasks);
 }
 
 function autoResizeTextarea(el) {
@@ -1033,15 +1043,76 @@ function renderDiffLines(container, text) {
   });
 }
 
+function clearRecentTasks() {
+  if (!threads || threads.length === 0) return;
+  if (!confirm("Clear all recent chat tasks?")) return;
+  threads = [];
+  localStorage.removeItem("aegis_threads");
+  activeThreadId = null;
+  latestRunData = null;
+  currentRunId = null;
+  renderThreadsList();
+  document.getElementById("btn-new-session").click();
+}
+
 async function resetDemo() {
-  if (!confirm("Reset demo repository and memory back to clean state?")) return;
+  const confirmed = confirm(
+    "Reset demo repository and memory back to clean state?\n\n" +
+    "This will:\n" +
+    "• Delete all recent chats and task history\n" +
+    "• Erase all learned organizational memory habits\n" +
+    "• Restore all Architecture Decisions (ADRs) to original seed state\n" +
+    "• Reset vault code back to clean starting state\n" +
+    "• Rebuild the temporal memory graph from scratch"
+  );
+  if (!confirmed) return;
+
   try {
     const res = await fetch("/api/reset", { method: "POST" });
-    if (res.ok) {
-      document.getElementById("btn-new-session").click();
-      initMemory();
-      initHealth();
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Reset failed");
     }
+
+    // 1. Wipe all local storage chats and recent task threads
+    threads = [];
+    localStorage.removeItem("aegis_threads");
+    activeThreadId = null;
+    latestRunData = null;
+    currentRunId = null;
+
+    // 2. Reset mode to chat and update UI
+    setAppMode("chat");
+    renderThreadsList();
+    document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
+
+    const heroView = document.getElementById("hero-view");
+    const messagesStream = document.getElementById("messages-stream");
+    const diffInspectorView = document.getElementById("diff-inspector-view");
+    const promptInput = document.getElementById("prompt-input");
+
+    if (heroView) heroView.style.display = "flex";
+    if (messagesStream) {
+      messagesStream.style.display = "none";
+      messagesStream.innerHTML = "";
+    }
+    if (diffInspectorView) {
+      diffInspectorView.style.display = "none";
+      diffInspectorView.innerHTML = "";
+    }
+    if (promptInput) {
+      promptInput.value = "";
+    }
+
+    // 3. Re-initialize memory graph and health
+    await initMemory();
+    await initHealth();
+
+    // 4. Close any open drawers or modals
+    const memoryDrawer = document.getElementById("memory-drawer");
+    if (memoryDrawer) memoryDrawer.classList.remove("open");
+    closeAdrModal();
+
   } catch (e) {
     alert("Reset failed: " + e.message);
   }
