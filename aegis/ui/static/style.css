@@ -1132,7 +1132,7 @@ body {
   max-width: 440px;
 }
 
-/* Unified Diff & Human-in-the-Loop Review */
+/* Unified Inline Diff & Human-in-the-Loop Review */
 .unified-diff-editor {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -1143,67 +1143,92 @@ body {
   flex-direction: column;
 }
 
-.diff-removed-block {
-  background: rgba(239, 68, 68, 0.08);
-  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
-  user-select: none;
-}
-
-.diff-removed-banner-header {
-  padding: 6px 14px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #fca5a5;
+.diff-chunk-wrapper {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
+  align-items: stretch;
+  width: 100%;
 }
 
-.diff-removed-lines {
-  padding: 2px 0 6px;
+.diff-gutter-col {
+  width: 32px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  user-select: none;
   font-family: var(--font-mono);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 22px;
+  padding: 4px 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.diff-del-row {
-  color: #f87171;
-  background: rgba(239, 68, 68, 0.14);
-  padding: 2px 14px;
-  white-space: pre;
-}
-
-.diff-editable-header {
-  padding: 7px 14px 4px;
-  font-size: 11px;
+.diff-gutter-sym {
+  height: 22px;
+  line-height: 22px;
   font-weight: 600;
-  color: #6ee7b7;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  background: rgba(16, 185, 129, 0.05);
-  border-bottom: 1px solid rgba(16, 185, 129, 0.15);
-  font-family: var(--font-mono);
-  user-select: none;
 }
 
-.unified-code-editor {
-  width: 100%;
+/* Context / Unchanged chunk */
+.diff-chunk-context {
+  background: transparent;
+}
+.diff-chunk-context .diff-gutter-col {
+  color: rgba(255, 255, 255, 0.2);
+}
+.diff-chunk-context .inline-code-chunk {
+  color: #e5e7eb;
+}
+
+/* Deleted row (read-only red line) */
+.diff-chunk-del {
+  background: rgba(239, 68, 68, 0.12);
+  border-top: 1px solid rgba(239, 68, 68, 0.22);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.22);
+}
+.diff-chunk-del .diff-gutter-col {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.18);
+  border-right: 1px solid rgba(239, 68, 68, 0.3);
+}
+.diff-del-code-line {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 22px;
+  color: #fca5a5;
+  padding: 4px 12px;
+  white-space: pre;
+  user-select: text;
+  flex-grow: 1;
+  overflow-x: auto;
+}
+
+/* Added chunk (editable green line / block) */
+.diff-chunk-add {
+  background: rgba(16, 185, 129, 0.10);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+}
+.diff-chunk-add .diff-gutter-col {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+  border-right: 1px solid rgba(16, 185, 129, 0.3);
+}
+.diff-chunk-add .inline-code-chunk {
+  color: #6ee7b7;
+}
+
+/* The textarea inside editable chunks */
+.inline-code-chunk {
+  flex-grow: 1;
   background: transparent;
   border: none;
-  padding: 10px 14px;
-  color: #e5e7eb;
+  padding: 4px 12px;
   font-family: var(--font-mono);
   font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
-  min-height: 110px;
+  line-height: 22px;
   outline: none;
+  resize: none;
+  overflow: hidden;
   white-space: pre;
   tab-size: 4;
 }

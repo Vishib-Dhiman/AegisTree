@@ -527,25 +527,54 @@ function renderAssistantResponse(container, data, promptText) {
     return;
   }
 
-  // 5. Unified Code & Review Card (Human-in-the-Loop Gate)
+  // 5. Unified Inline Diff & Review Card (Human-in-the-Loop Gate)
   const codeCard = document.createElement("div");
   codeCard.className = "code-card unified-review-card";
 
   const aegisDiff = data.aegis ? (data.aegis.diff || data.aegis.code || data.aegis.text) : "";
   const baselineDiff = data.baseline ? (data.baseline.diff || data.baseline.code || data.baseline.text) : "";
-  const editableCode = (data.aegis && data.aegis.code) ? data.aegis.code : (aegisDiff || "");
+  const targetFileLabel = data.target_file || "vault/store.py";
+  const isUnparseable = data.aegis && data.aegis.unparseable;
 
   codeCard.dataset.aegisDiff = aegisDiff;
   codeCard.dataset.baselineDiff = baselineDiff;
   codeCard.dataset.aegisMeta = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
   codeCard.dataset.baselineMeta = `Raw Baseline: ${data.tokens ? data.tokens.baseline : 0} tokens · ${Math.round(data.baseline ? data.baseline.latency_ms : 0)}ms`;
 
-  // Extract removed lines from diff (lines starting with - but not ---)
-  const diffLines = aegisDiff.split("\n");
-  const delLines = diffLines.filter(line => line.startsWith("-") && !line.startsWith("---"));
+  const chunks = parseDiffToChunks(aegisDiff, data.aegis ? data.aegis.code : "");
 
-  const targetFileLabel = data.target_file || "vault/store.py";
-  const isUnparseable = data.aegis && data.aegis.unparseable;
+  let editorHtml = `<div class="unified-diff-editor">`;
+  chunks.forEach(chunk => {
+    if (chunk.type === "del") {
+      chunk.lines.forEach(delLine => {
+        editorHtml += `
+          <div class="diff-chunk-wrapper diff-chunk-del">
+            <div class="diff-gutter-col">
+              <div class="diff-gutter-sym">-</div>
+            </div>
+            <div class="diff-del-code-line">${escapeHtml(delLine)}</div>
+          </div>
+        `;
+      });
+    } else if (chunk.type === "add") {
+      const syms = chunk.lines.map(() => `<div class="diff-gutter-sym">+</div>`).join("");
+      editorHtml += `
+        <div class="diff-chunk-wrapper diff-chunk-add" data-chunk-sym="+">
+          <div class="diff-gutter-col">${syms}</div>
+          <textarea class="inline-code-chunk diff-chunk-textarea diff-chunk-add-input" spellcheck="false">${escapeHtml(chunk.lines.join("\n"))}</textarea>
+        </div>
+      `;
+    } else {
+      const syms = chunk.lines.map(() => `<div class="diff-gutter-sym">&nbsp;</div>`).join("");
+      editorHtml += `
+        <div class="diff-chunk-wrapper diff-chunk-context" data-chunk-sym="&nbsp;">
+          <div class="diff-gutter-col">${syms}</div>
+          <textarea class="inline-code-chunk diff-chunk-textarea diff-chunk-context-input" spellcheck="false">${escapeHtml(chunk.lines.join("\n"))}</textarea>
+        </div>
+      `;
+    }
+  });
+  editorHtml += `</div>`;
 
   codeCard.innerHTML = `
     <div class="code-card-header">
@@ -560,45 +589,20 @@ function renderAssistantResponse(container, data, promptText) {
         <span class="code-meta" id="code-meta-text">Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens &middot; ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms</span>
       </div>
     </div>
-    <div class="unified-diff-editor">
-      ${delLines.length > 0 ? `
-        <div class="diff-removed-block">
-          <div class="diff-removed-banner-header">
-            <span>− Removed Lines (Read-Only)</span>
-          </div>
-          <div class="diff-removed-lines">
-            ${delLines.map(l => `<div class="diff-del-row">${escapeHtml(l)}</div>`).join("")}
-          </div>
-        </div>
-      ` : ""}
-      <div class="diff-editable-header">
-        <span>+ Proposed Implementation (Editable &middot; Human-in-the-Loop)</span>
-      </div>
-      <textarea class="unified-code-editor review-textarea" id="review-code-input" spellcheck="false">${escapeHtml(editableCode)}</textarea>
-    </div>
+    ${editorHtml}
     <div class="unified-card-footer">
       <span id="review-status-msg" style="font-size:12.5px; color:var(--text-muted);">${isUnparseable ? "Unparseable output - cannot commit." : "Ready to commit via FastMCP."}</span>
       <button class="btn-approve" id="btn-approve-action" ${isUnparseable ? "disabled" : ""}>Approve &amp; Commit</button>
     </div>
   `;
 
-  const reviewInput = codeCard.querySelector("#review-code-input");
+  setupInlineEditor(codeCard);
+
   const btnApprove = codeCard.querySelector("#btn-approve-action");
   const statusMsg = codeCard.querySelector("#review-status-msg");
 
-  if (reviewInput) {
-    setTimeout(() => {
-      reviewInput.style.height = "auto";
-      reviewInput.style.height = Math.max(110, reviewInput.scrollHeight + 8) + "px";
-    }, 20);
-    reviewInput.addEventListener("input", () => {
-      reviewInput.style.height = "auto";
-      reviewInput.style.height = Math.max(110, reviewInput.scrollHeight + 8) + "px";
-    });
-  }
-
-  if (btnApprove && !btnApprove.disabled && reviewInput) {
-    attachApproveHandler(codeCard, btnApprove, reviewInput, statusMsg);
+  if (btnApprove && !btnApprove.disabled) {
+    attachApproveHandler(codeCard, btnApprove, statusMsg);
   }
 
   container.appendChild(codeCard);
@@ -787,13 +791,104 @@ function deleteThread(threadId) {
   }
 }
 
-function attachApproveHandler(card, btnApprove, reviewInput, statusMsg) {
-  if (!btnApprove || !reviewInput) return;
-  if (btnApprove.disabled) return;
+function parseDiffToChunks(diffText, fallbackCode) {
+  if (!diffText || typeof diffText !== "string" || !diffText.includes("@@")) {
+    const raw = (fallbackCode || diffText || "").trim();
+    return [{ type: "context", lines: raw ? raw.split("\n") : [] }];
+  }
+  const lines = diffText.split("\n");
+  const hunks = [];
+  let inHunk = false;
+  let currentGroup = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith("---") || line.startsWith("+++")) continue;
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+
+    let type = "context";
+    let content = line;
+    if (line.startsWith("-")) {
+      type = "del";
+      content = line.slice(1);
+    } else if (line.startsWith("+")) {
+      type = "add";
+      content = line.slice(1);
+    } else if (line.startsWith(" ")) {
+      type = "context";
+      content = line.slice(1);
+    } else if (line === "") {
+      continue;
+    }
+
+    if (!currentGroup || currentGroup.type !== type) {
+      currentGroup = { type, lines: [content] };
+      hunks.push(currentGroup);
+    } else {
+      currentGroup.lines.push(content);
+    }
+  }
+
+  return hunks.length > 0 ? hunks : [{ type: "context", lines: (fallbackCode || "").split("\n") }];
+}
+
+function setupInlineEditor(card) {
+  card.querySelectorAll(".diff-chunk-wrapper").forEach(wrapper => {
+    const ta = wrapper.querySelector(".inline-code-chunk");
+    const gutter = wrapper.querySelector(".diff-gutter-col");
+    const sym = wrapper.dataset.chunkSym || "&nbsp;";
+
+    if (ta && gutter) {
+      function syncGutterAndHeight() {
+        ta.style.height = "auto";
+        ta.style.height = Math.max(22, ta.scrollHeight) + "px";
+
+        const lineCount = (ta.value.match(/\n/g) || []).length + 1;
+        let symHtml = "";
+        for (let i = 0; i < lineCount; i++) {
+          symHtml += `<div class="diff-gutter-sym">${sym}</div>`;
+        }
+        gutter.innerHTML = symHtml;
+      }
+
+      ta.addEventListener("input", syncGutterAndHeight);
+      ta.addEventListener("keydown", (e) => {
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const start = ta.selectionStart;
+          const end = ta.selectionEnd;
+          ta.value = ta.value.substring(0, start) + "    " + ta.value.substring(end);
+          ta.selectionStart = ta.selectionEnd = start + 4;
+          syncGutterAndHeight();
+        }
+      });
+
+      setTimeout(syncGutterAndHeight, 15);
+    }
+  });
+}
+
+function getCardApprovedCode(card) {
+  const textareas = card.querySelectorAll(".inline-code-chunk");
+  if (textareas.length === 0) {
+    const single = card.querySelector(".review-textarea, .unified-code-editor");
+    return single ? single.value : "";
+  }
+  return Array.from(textareas).map(ta => ta.value).join("\n");
+}
+
+function attachApproveHandler(card, btnApprove, statusMsg) {
+  if (!btnApprove || btnApprove.disabled) return;
 
   btnApprove.onclick = async () => {
     btnApprove.disabled = true;
     btnApprove.textContent = "Committing...";
+
+    const approvedCode = getCardApprovedCode(card);
 
     try {
       const resp = await fetch("/api/approve", {
@@ -801,7 +896,7 @@ function attachApproveHandler(card, btnApprove, reviewInput, statusMsg) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           run_id: currentRunId,
-          approved_code: reviewInput.value
+          approved_code: approvedCode
         })
       });
 
@@ -885,12 +980,13 @@ function rebindThreadCards(container) {
       };
     }
 
+    setupInlineEditor(card);
+
     // Rebind Unified Review Card inside code-card
     const btnApprove = card.querySelector(".btn-approve");
-    const reviewInput = card.querySelector(".review-textarea, .unified-code-editor");
     const statusMsg = card.querySelector("#review-status-msg");
-    if (btnApprove && !btnApprove.disabled && reviewInput) {
-      attachApproveHandler(card, btnApprove, reviewInput, statusMsg);
+    if (btnApprove && !btnApprove.disabled) {
+      attachApproveHandler(card, btnApprove, statusMsg);
     }
   });
 
@@ -902,15 +998,14 @@ function rebindThreadCards(container) {
   // 3. Rebind Legacy Review Panels (for threads saved before unification)
   container.querySelectorAll(".review-panel").forEach(panel => {
     const btnApprove = panel.querySelector(".btn-approve");
-    const reviewInput = panel.querySelector(".review-textarea");
     const statusMsg = panel.querySelector("#review-status-msg");
-    if (btnApprove && !btnApprove.disabled && reviewInput) {
-      attachApproveHandler(panel, btnApprove, reviewInput, statusMsg);
+    if (btnApprove && !btnApprove.disabled) {
+      attachApproveHandler(panel, btnApprove, statusMsg);
     }
   });
 
-  // 4. Auto-size review textareas
-  container.querySelectorAll(".review-textarea, .unified-code-editor").forEach(ta => {
+  // 4. Auto-size legacy review textareas
+  container.querySelectorAll(".review-textarea").forEach(ta => {
     ta.style.height = "auto";
     ta.style.height = Math.max(110, ta.scrollHeight + 8) + "px";
   });
