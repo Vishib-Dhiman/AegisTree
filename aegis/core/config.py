@@ -15,14 +15,6 @@ import httpx
 DEFAULT_CONFIG_PATH = Path(".aegis/config.json")
 
 SYSTEM2_CATALOG = {
-    "qwen2.5-coder:3b": {
-        "name": "Qwen 2.5 Coder 3B",
-        "provider": "ollama",
-        "params": "3.1B",
-        "disk_size_gb": 1.9,
-        "description": "Recommended default. Lightweight, fast, air-gapped sovereign model.",
-        "context_window": 32768,
-    },
     "qwen2.5-coder:7b": {
         "name": "Qwen 2.5 Coder 7B",
         "provider": "ollama",
@@ -31,16 +23,8 @@ SYSTEM2_CATALOG = {
         "description": "High-capacity local model for >= 16 GB RAM workstations.",
         "context_window": 32768,
     },
-    "deepseek-r1:7b": {
-        "name": "DeepSeek R1 Distill Qwen 7B",
-        "provider": "ollama",
-        "params": "7.6B",
-        "disk_size_gb": 4.7,
-        "description": "Chain-of-thought architectural reasoning for complex refactoring.",
-        "context_window": 32768,
-    },
     "deepseek-r1:8b": {
-        "name": "DeepSeek R1 Distill Llama 8B",
+        "name": "DeepSeek R1 8B",
         "provider": "ollama",
         "params": "8.0B",
         "disk_size_gb": 4.9,
@@ -48,20 +32,12 @@ SYSTEM2_CATALOG = {
         "context_window": 32768,
     },
     "deepseek-r1:14b": {
-        "name": "DeepSeek R1 Distill Qwen 14B",
+        "name": "DeepSeek R1 14B",
         "provider": "ollama",
         "params": "14.7B",
         "disk_size_gb": 9.0,
         "description": "High-capacity reasoning model for large architectural tasks.",
         "context_window": 32768,
-    },
-    "llama3.1:8b": {
-        "name": "Llama 3.1 8B Instruct",
-        "provider": "ollama",
-        "params": "8.0B",
-        "disk_size_gb": 4.9,
-        "description": "Generalist open-weights baseline instruction model.",
-        "context_window": 8192,
     },
     "mock-offline-fast": {
         "name": "Lightweight Mock Engine",
@@ -163,35 +139,17 @@ class ConfigManager:
         }
 
     def list_available_models(self) -> Dict[str, Any]:
-        installed = self._query_installed_models()
         catalog = {}
         for mid, info in SYSTEM2_CATALOG.items():
-            entry = dict(info)
-            if entry.get("provider") == "mock":
-                entry["installed"] = True
-            else:
-                entry["installed"] = any(
-                    mid == inst or (":" in inst and mid == inst.split(":")[0]) or (":" in mid and mid.split(":")[0] == inst)
-                    for inst in installed
-                )
-            catalog[mid] = entry
-
-        # Also include any installed Ollama models not in catalog
-        for inst in installed:
-            base = inst.split(":")[0]
-            if inst not in catalog and base not in catalog:
-                catalog[inst] = {
-                    "name": inst,
-                    "provider": "ollama",
-                    "params": "Local",
-                    "disk_size_gb": 0.0,
-                    "description": "Installed local Ollama model.",
-                    "installed": True,
-                }
+            if info.get("provider") == "mock":
+                continue
+            catalog[mid] = {
+                "name": info["name"],
+                "provider": info["provider"],
+            }
 
         return {
             "active_model": self.config.system2_model,
-            "installed_models": installed,
             "models": catalog,
         }
 

@@ -198,47 +198,20 @@ async function initModelSelector() {
     const models = data.models || {};
     const active = data.active_model;
 
-    // Dynamically populate model options with installed status
+    // Populate dropdown with clean model names only
     select.innerHTML = "";
-
-    const installedGroup = document.createElement("optgroup");
-    installedGroup.label = "Installed Local Models (Ready)";
-
-    const notInstalledGroup = document.createElement("optgroup");
-    notInstalledGroup.label = "Available in Catalog (Needs Pull)";
-
-    const mockGroup = document.createElement("optgroup");
-    mockGroup.label = "Testing Engines";
-
     for (const [id, m] of Object.entries(models)) {
       const opt = document.createElement("option");
       opt.value = id;
+      opt.textContent = m.name || id;
       if (id === active) opt.selected = true;
-
-      if (m.provider === "mock") {
-        opt.textContent = `${m.name} · Fast Mock`;
-        mockGroup.appendChild(opt);
-      } else if (m.installed) {
-        opt.textContent = `${m.name} (${m.disk_size_gb || 0} GB) ✓ Ready`;
-        installedGroup.appendChild(opt);
-      } else {
-        opt.textContent = `${m.name} (${m.disk_size_gb || 0} GB) ⚠️ Needs: ollama pull ${id}`;
-        notInstalledGroup.appendChild(opt);
-      }
+      select.appendChild(opt);
     }
-
-    if (installedGroup.children.length > 0) select.appendChild(installedGroup);
-    if (notInstalledGroup.children.length > 0) select.appendChild(notInstalledGroup);
-    if (mockGroup.children.length > 0) select.appendChild(mockGroup);
 
     if (active) select.value = active;
 
     select.addEventListener("change", async () => {
       const chosen = select.value;
-      const modelMeta = models[chosen];
-      if (modelMeta && !modelMeta.installed && modelMeta.provider !== "mock") {
-        alert(`Model "${chosen}" is not downloaded yet.\n\nTo use it, run in your terminal:\n  ollama pull ${chosen}\n\nUntil downloaded, please select an installed model (e.g. Qwen 2.5 Coder 7B).`);
-      }
       try {
         await fetch("/api/models", {
           method: "POST",
