@@ -111,51 +111,56 @@
         </div>
       </div>
 
-      <div class="sidebar-section-title">Rehearsed Pitch Scenarios</div>
-      <div class="recents-list">
-        <div class="recent-item" data-prompt="persist">
-          <span class="recent-icon">🔐</span>
-          <span class="recent-text">Persist Token (ADR-014)</span>
-        </div>
-        <div class="recent-item" data-prompt="rotate">
-          <span class="recent-icon">⚡</span>
-          <span class="recent-text">Rotate Token (Habit)</span>
-        </div>
-        <div class="recent-item danger" data-prompt="force_legacy">
-          <span class="recent-icon">🛡️</span>
-          <span class="recent-text">Force Legacy (Refusal)</span>
-        </div>
-        <div class="recent-item" data-prompt="pyca_oaep">
-          <span class="recent-icon">🔑</span>
-          <span class="recent-text">PyCA RSA OAEP (ADR-021)</span>
-        </div>
-        <div class="recent-item danger" data-prompt="pyca_pkcs">
-          <span class="recent-icon">🚫</span>
-          <span class="recent-text">PyCA Force PKCS1 (Refusal)</span>
-        </div>
-        <div class="recent-item" data-prompt="pydantic_v2">
-          <span class="recent-icon">📦</span>
-          <span class="recent-text">Pydantic v2 (ADR-032)</span>
-        </div>
-        <div class="recent-item danger" data-prompt="pydantic_v1">
-          <span class="recent-icon">🚫</span>
-          <span class="recent-text">Pydantic Force .dict()</span>
-        </div>
-        <div class="recent-item" data-prompt="db_sqlalchemy">
-          <span class="recent-icon">🗄️</span>
-          <span class="recent-text">SQLAlchemy 2.0 (ADR-045)</span>
-        </div>
-        <div class="recent-item danger" data-prompt="db_engine">
-          <span class="recent-icon">🚫</span>
-          <span class="recent-text">SQL Force engine.execute</span>
-        </div>
-        <div class="recent-item" data-prompt="kyber">
-          <span class="recent-icon">⚛️</span>
-          <span class="recent-text">Migrate Kyber (Abstention)</span>
-        </div>
-        <div class="recent-item" data-prompt="explain">
-          <span class="recent-icon">📖</span>
-          <span class="recent-text">Explain Architecture</span>
+      <div class="sidebar-scrollable">
+        <div class="sidebar-section-title" id="threads-section-title" style="display: none;">Recent Tasks</div>
+        <div class="threads-list" id="threads-list"></div>
+
+        <div class="sidebar-section-title">Rehearsed Pitch Scenarios</div>
+        <div class="recents-list">
+          <div class="recent-item" data-prompt="persist">
+            <span class="recent-icon">🔐</span>
+            <span class="recent-text">Persist Token (ADR-014)</span>
+          </div>
+          <div class="recent-item" data-prompt="rotate">
+            <span class="recent-icon">⚡</span>
+            <span class="recent-text">Rotate Token (Habit)</span>
+          </div>
+          <div class="recent-item danger" data-prompt="force_legacy">
+            <span class="recent-icon">🛡️</span>
+            <span class="recent-text">Force Legacy (Refusal)</span>
+          </div>
+          <div class="recent-item" data-prompt="pyca_oaep">
+            <span class="recent-icon">🔑</span>
+            <span class="recent-text">PyCA RSA OAEP (ADR-021)</span>
+          </div>
+          <div class="recent-item danger" data-prompt="pyca_pkcs">
+            <span class="recent-icon">🚫</span>
+            <span class="recent-text">PyCA Force PKCS1 (Refusal)</span>
+          </div>
+          <div class="recent-item" data-prompt="pydantic_v2">
+            <span class="recent-icon">📦</span>
+            <span class="recent-text">Pydantic v2 (ADR-032)</span>
+          </div>
+          <div class="recent-item danger" data-prompt="pydantic_v1">
+            <span class="recent-icon">🚫</span>
+            <span class="recent-text">Pydantic Force .dict()</span>
+          </div>
+          <div class="recent-item" data-prompt="db_sqlalchemy">
+            <span class="recent-icon">🗄️</span>
+            <span class="recent-text">SQLAlchemy 2.0 (ADR-045)</span>
+          </div>
+          <div class="recent-item danger" data-prompt="db_engine">
+            <span class="recent-icon">🚫</span>
+            <span class="recent-text">SQL Force engine.execute</span>
+          </div>
+          <div class="recent-item" data-prompt="kyber">
+            <span class="recent-icon">⚛️</span>
+            <span class="recent-text">Migrate Kyber (Abstention)</span>
+          </div>
+          <div class="recent-item" data-prompt="explain">
+            <span class="recent-icon">📖</span>
+            <span class="recent-text">Explain Architecture</span>
+          </div>
         </div>
       </div>
 

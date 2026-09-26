@@ -187,21 +187,105 @@ body {
   color: var(--text-muted);
 }
 
-.recents-list {
+.sidebar-scrollable {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-scrollable::-webkit-scrollbar {
+  width: 5px;
+}
+.sidebar-scrollable::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.threads-list {
   padding: 0 10px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  margin-bottom: 8px;
 }
 
-.recents-list::-webkit-scrollbar {
-  width: 5px;
+.thread-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
 }
-.recents-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+
+.thread-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.thread-item.active {
+  background: rgba(56, 189, 248, 0.12);
+  color: #fff;
+  font-weight: 500;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-left: 3px solid var(--accent-cyan);
+}
+
+.thread-item-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-item-icon {
+  font-size: 12px;
+  color: var(--accent-cyan);
+  flex-shrink: 0;
+}
+
+.thread-item-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+.thread-item-delete {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
   border-radius: 4px;
+  font-size: 14px;
+  opacity: 0;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.thread-item:hover .thread-item-delete {
+  opacity: 1;
+}
+
+.thread-item-delete:hover {
+  color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.recents-list {
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .recent-item {

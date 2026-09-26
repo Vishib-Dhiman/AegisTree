@@ -1,6 +1,8 @@
 // AegisTree Sovereign AI Assistant Client
 
 let currentRunId = null;
+let activeThreadId = null;
+let threads = [];
 
 const PROMPTS = {
   persist: "Add a persist_session_token function that stores the session token using our current vault standard.",
@@ -16,10 +18,25 @@ const PROMPTS = {
   kyber: "Migrate the vault to CRYSTALS-Kyber."
 };
 
+const PRESET_TITLES = {
+  persist: "Persist Token (ADR-014)",
+  rotate: "Rotate Token (Habit)",
+  force_legacy: "Force Legacy (Refusal)",
+  pyca_oaep: "PyCA RSA OAEP (ADR-021)",
+  pyca_pkcs: "PyCA Force PKCS1 (Refusal)",
+  pydantic_v2: "Pydantic v2 (ADR-032)",
+  pydantic_v1: "Pydantic Force .dict()",
+  db_sqlalchemy: "SQLAlchemy 2.0 (ADR-045)",
+  db_engine: "SQL Force engine.execute",
+  kyber: "Migrate Kyber (Abstention)",
+  explain: "Explain Architecture"
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   initHealth();
   initModelSelector();
   initMemory();
+  initThreads();
   initEventListeners();
 });
 
@@ -58,7 +75,11 @@ function initEventListeners() {
     elem.addEventListener("click", () => {
       const key = elem.getAttribute("data-prompt");
       if (PROMPTS[key]) {
-        runWithPrompt(PROMPTS[key]);
+        activeThreadId = null;
+        renderThreadsList();
+        document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
+        elem.classList.add("active");
+        runWithPrompt(PROMPTS[key], PRESET_TITLES[key]);
       }
     });
   });
@@ -84,6 +105,9 @@ function initEventListeners() {
 
   // New session button
   document.getElementById("btn-new-session").addEventListener("click", () => {
+    activeThreadId = null;
+    renderThreadsList();
+    document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
     document.getElementById("hero-view").style.display = "flex";
     document.getElementById("messages-stream").style.display = "none";
     document.getElementById("messages-stream").innerHTML = "";
@@ -227,10 +251,28 @@ async function initMemory() {
   }
 }
 
-async function runWithPrompt(promptText) {
+async function runWithPrompt(promptText, presetTitle = null) {
   document.getElementById("hero-view").style.display = "none";
   const messagesStream = document.getElementById("messages-stream");
   messagesStream.style.display = "flex";
+
+  // Register thread if new session
+  if (!activeThreadId) {
+    activeThreadId = "thread_" + Date.now();
+    const title = presetTitle || generateThreadTitle(promptText);
+    const newThread = {
+      id: activeThreadId,
+      title: title,
+      prompt: promptText,
+      timestamp: Date.now(),
+      runId: null,
+      messagesHtml: ""
+    };
+    threads.unshift(newThread);
+    if (threads.length > 25) threads.pop();
+    saveThreads();
+    renderThreadsList();
+  }
 
   // 1. Append User Message Bubble
   const userMsg = document.createElement("div");
@@ -329,6 +371,10 @@ async function runWithPrompt(promptText) {
 
     const data = await res.json();
     currentRunId = data.run_id;
+    if (activeThreadId) {
+      const curThread = threads.find(t => t.id === activeThreadId);
+      if (curThread) curThread.runId = currentRunId;
+    }
 
     // Render response into assistantMsg
     renderAssistantResponse(assistantMsg, data, promptText);
@@ -411,6 +457,7 @@ function renderAssistantResponse(container, data, promptText) {
       </div>
     `;
     container.appendChild(banner);
+    snapshotActiveThread();
     return;
   }
 
@@ -431,6 +478,7 @@ function renderAssistantResponse(container, data, promptText) {
       </div>
     `;
     container.appendChild(banner);
+    snapshotActiveThread();
     return;
   }
 
@@ -448,6 +496,7 @@ function renderAssistantResponse(container, data, promptText) {
       </div>
     `;
     container.appendChild(explainCard);
+    snapshotActiveThread();
     return;
   }
 
@@ -457,6 +506,11 @@ function renderAssistantResponse(container, data, promptText) {
 
   const aegisDiff = data.aegis ? (data.aegis.diff || data.aegis.code || data.aegis.text) : "";
   const baselineDiff = data.baseline ? (data.baseline.diff || data.baseline.code || data.baseline.text) : "";
+
+  codeCard.dataset.aegisDiff = aegisDiff;
+  codeCard.dataset.baselineDiff = baselineDiff;
+  codeCard.dataset.aegisMeta = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
+  codeCard.dataset.baselineMeta = `Raw Baseline: ${data.tokens ? data.tokens.baseline : 0} tokens · ${Math.round(data.baseline ? data.baseline.latency_ms : 0)}ms`;
 
   codeCard.innerHTML = `
     <div class="code-card-header">
@@ -556,6 +610,7 @@ function renderAssistantResponse(container, data, promptText) {
             scrollToBottom(true);
           }
           initMemory();
+          snapshotActiveThread();
         } else {
           statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(resData.detail || resData.reason || "Refused")}</span>`;
           btnApprove.disabled = false;
@@ -571,6 +626,7 @@ function renderAssistantResponse(container, data, promptText) {
     container.appendChild(reviewPanel);
   }
 
+  snapshotActiveThread();
   scrollToBottom(true);
 }
 
@@ -617,4 +673,225 @@ async function resetDemo() {
 function escapeHtml(str) {
   if (!str) return "";
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function snapshotActiveThread() {
+  if (activeThreadId) {
+    const curThread = threads.find(t => t.id === activeThreadId);
+    if (curThread) {
+      curThread.messagesHtml = document.getElementById("messages-stream").innerHTML;
+      saveThreads();
+    }
+  }
+}
+
+function initThreads() {
+  try {
+    const raw = localStorage.getItem("aegis_threads");
+    if (raw) {
+      threads = JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error("Failed to load threads from localStorage:", e);
+    threads = [];
+  }
+  renderThreadsList();
+}
+
+function saveThreads() {
+  try {
+    localStorage.setItem("aegis_threads", JSON.stringify(threads));
+  } catch (e) {
+    console.error("Failed to save threads to localStorage:", e);
+  }
+}
+
+function generateThreadTitle(prompt) {
+  if (!prompt) return "New Task";
+  let clean = prompt.trim();
+  clean = clean.replace(/^(hello|hi|hey|greetings|please|pls|can\s+you|could\s+you|would\s+you|i\s+want\s+to|i\s+need\s+to|help\s+me\s+to|tell\s+me\s+about)\s+/gi, "");
+  clean = clean.replace(/^(please|pls)\s+/gi, "");
+  clean = clean.replace(/^(add\s+a\s+|create\s+a\s+|implement\s+a\s+|write\s+a\s+)/gi, "Add ");
+  clean = clean.trim();
+  if (!clean) clean = prompt.trim();
+  clean = clean.charAt(0).toUpperCase() + clean.slice(1);
+  if (clean.length > 28) {
+    clean = clean.slice(0, 26).trim() + "…";
+  }
+  return clean;
+}
+
+function renderThreadsList() {
+  const container = document.getElementById("threads-list");
+  const sectionTitle = document.getElementById("threads-section-title");
+  if (!container) return;
+
+  container.innerHTML = "";
+  if (!threads || threads.length === 0) {
+    if (sectionTitle) sectionTitle.style.display = "none";
+    return;
+  }
+
+  if (sectionTitle) sectionTitle.style.display = "block";
+
+  threads.forEach(t => {
+    const item = document.createElement("div");
+    item.className = "thread-item" + (t.id === activeThreadId ? " active" : "");
+    item.dataset.threadId = t.id;
+
+    const left = document.createElement("div");
+    left.className = "thread-item-left";
+    left.innerHTML = `<span class="thread-item-icon">💬</span><span class="thread-item-title" title="${escapeHtml(t.prompt || t.title)}">${escapeHtml(t.title || "Conversation")}</span>`;
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "thread-item-delete";
+    delBtn.innerHTML = "&times;";
+    delBtn.title = "Delete thread";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteThread(t.id);
+    });
+
+    item.appendChild(left);
+    item.appendChild(delBtn);
+
+    item.addEventListener("click", () => {
+      loadThread(t.id);
+    });
+
+    container.appendChild(item);
+  });
+}
+
+function loadThread(threadId) {
+  const target = threads.find(t => t.id === threadId);
+  if (!target) return;
+
+  activeThreadId = threadId;
+  currentRunId = target.runId || null;
+  renderThreadsList();
+
+  document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
+
+  document.getElementById("hero-view").style.display = "none";
+  const messagesStream = document.getElementById("messages-stream");
+  messagesStream.style.display = "flex";
+  messagesStream.innerHTML = target.messagesHtml || "";
+
+  rebindThreadCards(messagesStream);
+  scrollToBottom(false);
+}
+
+function deleteThread(threadId) {
+  threads = threads.filter(t => t.id !== threadId);
+  saveThreads();
+
+  if (activeThreadId === threadId) {
+    document.getElementById("btn-new-session").click();
+  } else {
+    renderThreadsList();
+  }
+}
+
+function rebindThreadCards(container) {
+  if (!container) return;
+
+  // 1. Rebind Thought Accordions
+  container.querySelectorAll(".thought-card").forEach(card => {
+    const header = card.querySelector(".thought-header");
+    if (header) {
+      header.onclick = () => card.classList.toggle("expanded");
+    }
+  });
+
+  // 2. Rebind Code Cards and Diff Tabs
+  container.querySelectorAll(".code-card").forEach(card => {
+    const tabAegis = card.querySelector("#tab-aegis, .code-tab-btn:first-child");
+    const tabBaseline = card.querySelector("#tab-baseline, .code-tab-btn:nth-child(2)");
+    const diffView = card.querySelector(".diff-display");
+    const metaText = card.querySelector(".code-meta");
+
+    if (tabAegis && tabBaseline && diffView) {
+      tabAegis.onclick = () => {
+        tabAegis.classList.add("active");
+        tabBaseline.classList.remove("active");
+        if (card.dataset.aegisDiff !== undefined) {
+          renderDiffLines(diffView, card.dataset.aegisDiff);
+        }
+        if (card.dataset.aegisMeta && metaText) {
+          metaText.textContent = card.dataset.aegisMeta;
+        }
+      };
+
+      tabBaseline.onclick = () => {
+        tabBaseline.classList.add("active");
+        tabAegis.classList.remove("active");
+        if (card.dataset.baselineDiff !== undefined) {
+          renderDiffLines(diffView, card.dataset.baselineDiff);
+        }
+        if (card.dataset.baselineMeta && metaText) {
+          metaText.textContent = card.dataset.baselineMeta;
+        }
+      };
+    }
+  });
+
+  // 3. Rebind Review Panel and Approve action if not yet approved
+  container.querySelectorAll(".review-panel").forEach(panel => {
+    const btnApprove = panel.querySelector(".btn-approve");
+    const reviewInput = panel.querySelector(".review-textarea");
+    const statusMsg = panel.querySelector("#review-status-msg");
+    if (btnApprove && !btnApprove.disabled && reviewInput) {
+      btnApprove.onclick = async () => {
+        btnApprove.disabled = true;
+        btnApprove.textContent = "Committing...";
+
+        try {
+          const resp = await fetch("/api/approve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              run_id: currentRunId,
+              approved_code: reviewInput.value
+            })
+          });
+
+          const resData = await resp.json();
+
+          if (resp.ok && resData.applied) {
+            btnApprove.textContent = "Approved ✓";
+            btnApprove.style.background = "#059669";
+            if (statusMsg) statusMsg.innerHTML = `<span style="color:var(--accent-green); font-weight:600;">✓ Patch Committed &middot; Receipt #${resData.receipt_id}</span>`;
+
+            if (resData.habit_label) {
+              const habitAlert = document.createElement("div");
+              habitAlert.className = "habit-badge-alert";
+              habitAlert.innerHTML = `
+                <span class="sparkle-mini">✦</span>
+                <span><strong>New Habit Synthesized:</strong> ${escapeHtml(resData.habit_label)}</span>
+              `;
+              panel.appendChild(habitAlert);
+              scrollToBottom(true);
+            }
+            initMemory();
+            snapshotActiveThread();
+          } else {
+            if (statusMsg) statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(resData.detail || resData.reason || "Refused")}</span>`;
+            btnApprove.disabled = false;
+            btnApprove.textContent = "Approve & Commit";
+          }
+        } catch (err) {
+          if (statusMsg) statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(err.message)}</span>`;
+          btnApprove.disabled = false;
+          btnApprove.textContent = "Approve & Commit";
+        }
+      };
+    }
+  });
+
+  // 4. Auto-size review textareas
+  container.querySelectorAll(".review-textarea").forEach(ta => {
+    ta.style.height = "auto";
+    ta.style.height = Math.max(90, ta.scrollHeight + 8) + "px";
+  });
 }
