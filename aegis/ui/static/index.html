@@ -327,7 +327,10 @@
 
       <div class="drawer-content">
         <div class="drawer-section">
-          <h3 class="drawer-section-title">In-Force Architectural Decisions</h3>
+          <div class="drawer-section-header">
+            <h3 class="drawer-section-title">In-Force Architectural Decisions</h3>
+            <button id="btn-add-adr" class="btn-xs-primary" title="Create a new Architecture Decision Record">+ New ADR</button>
+          </div>
           <ul id="memory-in-force" class="memory-tree-list"></ul>
         </div>
 
@@ -348,8 +351,80 @@
       </div>
     </div>
 
+    <!-- ADR Detail & Editor Modal Backdrop -->
+    <div id="adr-modal-backdrop" class="modal-backdrop" style="display: none;">
+      <div class="adr-modal-dialog">
+        <div class="adr-modal-header">
+          <div class="adr-modal-title-area">
+            <span id="adr-modal-badge" class="status-badge green">In Force</span>
+            <h3 id="adr-modal-title" class="adr-modal-title">ADR Details</h3>
+          </div>
+          <div class="adr-modal-actions">
+            <button id="btn-adr-toggle-edit" class="btn-xs-secondary">Edit</button>
+            <button id="btn-adr-delete" class="btn-xs-danger">Delete</button>
+            <button id="btn-adr-close" class="icon-btn-ghost">&times;</button>
+          </div>
+        </div>
+
+        <!-- Read View -->
+        <div id="adr-modal-view" class="adr-modal-body">
+          <div class="adr-meta-bar">
+            <div class="adr-meta-item">
+              <span class="adr-meta-label">File</span>
+              <span id="adr-view-file" class="adr-meta-val">docs/adr/...</span>
+            </div>
+            <div class="adr-meta-item">
+              <span class="adr-meta-label">Date</span>
+              <span id="adr-view-date" class="adr-meta-val">2026-03-12</span>
+            </div>
+            <div class="adr-meta-item">
+              <span class="adr-meta-label">Tags</span>
+              <span id="adr-view-tags" class="adr-meta-val">None</span>
+            </div>
+          </div>
+
+          <div class="adr-section-block">
+            <div class="adr-section-heading">Decision</div>
+            <div id="adr-view-decision" class="adr-decision-box"></div>
+          </div>
+
+          <div class="adr-literals-grid">
+            <div class="adr-literals-col">
+              <div class="adr-section-heading" style="color: var(--accent-green);">Required Literals</div>
+              <div id="adr-view-required" class="adr-tokens-list"></div>
+            </div>
+            <div class="adr-literals-col">
+              <div class="adr-section-heading" style="color: var(--accent-red);">Forbidden Literals</div>
+              <div id="adr-view-forbidden" class="adr-tokens-list"></div>
+            </div>
+          </div>
+
+          <div class="adr-section-block">
+            <div class="adr-section-heading">Full Specification Markdown</div>
+            <pre id="adr-view-raw" class="adr-raw-code-box"></pre>
+          </div>
+        </div>
+
+        <!-- Edit / Create Form View -->
+        <div id="adr-modal-edit" class="adr-modal-body" style="display: none;">
+          <div id="adr-create-filename-row" class="adr-field-group" style="display: none;">
+            <label class="adr-field-label">Filename (in docs/adr/)</label>
+            <input id="adr-edit-filename" class="adr-text-input" placeholder="046-my-decision.md" spellcheck="false" />
+          </div>
+          <div class="adr-field-group" style="flex: 1 1 auto; display: flex; flex-direction: column;">
+            <label class="adr-field-label">ADR Markdown Content</label>
+            <textarea id="adr-edit-content" class="adr-markdown-editor" spellcheck="false" placeholder="# ADR-0XX: Title..."></textarea>
+          </div>
+          <div class="adr-edit-footer">
+            <button id="btn-adr-cancel-edit" class="btn-xs-secondary">Cancel</button>
+            <button id="btn-adr-save" class="btn-xs-primary">Save ADR</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <script src="app.js?v=2.1"></script>
+  <script src="app.js?v=2.2"></script>
 </body>
 </html>

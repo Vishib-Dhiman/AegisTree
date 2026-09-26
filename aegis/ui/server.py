@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from aegis.core.config import SystemConfig, config_manager
-from aegis.core.ingestion import WorkspaceIngestor
+from aegis.core.ingestion import ADRParser, WorkspaceIngestor
 from aegis.core.models import EpistemicStatus, NodeType
 from aegis.demo import seed_vault
 from aegis.mcp.tools import apply_patch, propose_patch, search_decisions
@@ -788,6 +788,163 @@ def get_tools() -> List[Dict[str, str]]:
             "description": "Applies human-approved patch to target repository file after strict safety and air-gap checks.",
         },
     ]
+
+
+class CreateAdrRequest(BaseModel):
+    filename: str
+    content: str
+
+
+class UpdateAdrRequest(BaseModel):
+    content: str
+
+
+def _reload_workspace_memory():
+    global graph, router
+    # Preserve learned habits
+    habits = [n for n in graph.all_nodes() if n.type == NodeType.HABIT]
+    nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
+    note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes")
+    graph.replace_corpus(nodes, edges)
+    for h in habits:
+        graph.upsert_node(h)
+    for n in note_nodes:
+        graph.upsert_node(n)
+    router = Router(graph=graph, config=config)
+
+
+@app.get("/api/adrs")
+def list_adrs() -> Dict[str, Any]:
+    adr_dir = workspace_root / "docs" / "adr"
+    if not adr_dir.exists():
+        return {"adrs": []}
+    adrs = []
+    for f in sorted(adr_dir.glob("*.md")):
+        parsed = ADRParser.parse_file(f)
+        content = f.read_text(encoding="utf-8", errors="ignore")
+        if parsed:
+            node = parsed[0]
+            adrs.append({
+                "id": node.id,
+                "filename": f.name,
+                "title": node.label,
+                "status": node.metadata.get("raw_status", "accepted"),
+                "epistemic_status": node.epistemic_status.value,
+                "date": node.valid_from.strftime("%Y-%m-%d") if node.valid_from else "",
+                "tags": node.tags,
+                "required": node.required_literals,
+                "forbidden": node.forbidden_literals,
+                "description": node.description,
+                "content": content,
+            })
+        else:
+            adrs.append({
+                "id": f"adr:{f.stem}",
+                "filename": f.name,
+                "title": f.stem,
+                "status": "accepted",
+                "epistemic_status": "active",
+                "date": "",
+                "tags": [],
+                "required": [],
+                "forbidden": [],
+                "description": "",
+                "content": content,
+            })
+    return {"adrs": adrs}
+
+
+@app.get("/api/adr/{adr_id:path}")
+def get_adr(adr_id: str) -> Dict[str, Any]:
+    stem = adr_id.removeprefix("adr:")
+    filename = f"{stem}.md" if not stem.endswith(".md") else stem
+    filepath = workspace_root / "docs" / "adr" / filename
+    if not filepath.exists():
+        adr_dir = workspace_root / "docs" / "adr"
+        for f in adr_dir.glob("*.md"):
+            if f.stem == stem or f"adr:{f.stem}" == adr_id:
+                filepath = f
+                break
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+
+    parsed = ADRParser.parse_file(filepath)
+    node = parsed[0] if parsed else None
+    content = filepath.read_text(encoding="utf-8", errors="ignore")
+    return {
+        "id": node.id if node else f"adr:{filepath.stem}",
+        "filename": filepath.name,
+        "title": node.label if node else filepath.stem,
+        "status": node.metadata.get("raw_status", "accepted") if node else "accepted",
+        "epistemic_status": node.epistemic_status.value if node else "active",
+        "date": node.valid_from.strftime("%Y-%m-%d") if node and node.valid_from else "",
+        "tags": node.tags if node else [],
+        "required": node.required_literals if node else [],
+        "forbidden": node.forbidden_literals if node else [],
+        "description": node.description if node else "",
+        "content": content,
+    }
+
+
+@app.post("/api/adr")
+def create_adr(req: CreateAdrRequest) -> Dict[str, Any]:
+    fname = req.filename.strip()
+    if not fname:
+        fname = f"adr-{uuid.uuid4().hex[:6]}.md"
+    if not fname.endswith(".md"):
+        fname += ".md"
+    safe_fname = Path(fname).name
+    adr_dir = workspace_root / "docs" / "adr"
+    adr_dir.mkdir(parents=True, exist_ok=True)
+    filepath = adr_dir / safe_fname
+    if filepath.exists():
+        raise HTTPException(status_code=409, detail=f"ADR file '{safe_fname}' already exists")
+
+    filepath.write_text(req.content.strip() + "\n", encoding="utf-8")
+    _reload_workspace_memory()
+    return {"status": "ok", "filename": safe_fname, "id": f"adr:{filepath.stem}"}
+
+
+@app.put("/api/adr/{adr_id:path}")
+def update_adr(adr_id: str, req: UpdateAdrRequest) -> Dict[str, Any]:
+    stem = adr_id.removeprefix("adr:")
+    filename = f"{stem}.md" if not stem.endswith(".md") else stem
+    filepath = workspace_root / "docs" / "adr" / filename
+    if not filepath.exists():
+        adr_dir = workspace_root / "docs" / "adr"
+        for f in adr_dir.glob("*.md"):
+            if f.stem == stem or f"adr:{f.stem}" == adr_id:
+                filepath = f
+                break
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+
+    filepath.write_text(req.content.strip() + "\n", encoding="utf-8")
+    _reload_workspace_memory()
+    return {"status": "ok", "filename": filepath.name, "id": f"adr:{filepath.stem}"}
+
+
+@app.delete("/api/adr/{adr_id:path}")
+def delete_adr(adr_id: str) -> Dict[str, Any]:
+    stem = adr_id.removeprefix("adr:")
+    filename = f"{stem}.md" if not stem.endswith(".md") else stem
+    filepath = workspace_root / "docs" / "adr" / filename
+    if not filepath.exists():
+        adr_dir = workspace_root / "docs" / "adr"
+        for f in adr_dir.glob("*.md"):
+            if f.stem == stem or f"adr:{f.stem}" == adr_id:
+                filepath = f
+                break
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+
+    try:
+        filepath.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
+
+    _reload_workspace_memory()
+    return {"status": "ok", "deleted": filepath.name}
 
 
 # Mount static files at root

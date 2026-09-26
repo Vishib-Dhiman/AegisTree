@@ -14,7 +14,7 @@ class ADRParser:
     """Parses Architecture Decision Records (ADRs) in markdown format."""
 
     TITLE_PATTERN = re.compile(r"^#\s+(?:\d+[\.\-\s]+)?(.+)$", re.MULTILINE)
-    STATUS_PATTERN = re.compile(r"(?:Status|State):\s*([a-zA-Z\s\-]+)", re.IGNORECASE)
+    STATUS_PATTERN = re.compile(r"^[*-]?\s*(?:Status|State):\s*([a-zA-Z0-9_\- ]+)", re.IGNORECASE | re.MULTILINE)
     DATE_PATTERN = re.compile(r"(?:Date|Effective):\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
     SUPERSEDES_PATTERN = re.compile(r"^[*-]?\s*(?:Supersedes|Replaces|Deprecates):\s*(.+)$", re.IGNORECASE | re.MULTILINE)
     TAGS_PATTERN = re.compile(r"^[*-]?\s*Tags:\s*(.+)$", re.IGNORECASE | re.MULTILINE)

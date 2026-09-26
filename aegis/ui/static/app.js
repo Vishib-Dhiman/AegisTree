@@ -38,6 +38,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initHealth();
   initModelSelector();
   initMemory();
+  initAdrModal();
   initThreads();
   initEventListeners();
 });
@@ -228,6 +229,286 @@ async function initModelSelector() {
   }
 }
 
+let currentModalAdrId = null;
+let currentModalAdrData = null;
+let isAdrModalCreateMode = false;
+
+function initAdrModal() {
+  const backdrop = document.getElementById("adr-modal-backdrop");
+  const btnClose = document.getElementById("btn-adr-close");
+  const btnToggleEdit = document.getElementById("btn-adr-toggle-edit");
+  const btnDelete = document.getElementById("btn-adr-delete");
+  const btnCancelEdit = document.getElementById("btn-adr-cancel-edit");
+  const btnSave = document.getElementById("btn-adr-save");
+  const btnAddAdr = document.getElementById("btn-add-adr");
+
+  if (btnAddAdr) {
+    btnAddAdr.addEventListener("click", () => openAdrModal(null, true));
+  }
+
+  if (btnClose) {
+    btnClose.addEventListener("click", closeAdrModal);
+  }
+
+  if (backdrop) {
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeAdrModal();
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && backdrop && backdrop.style.display !== "none") {
+      closeAdrModal();
+    }
+  });
+
+  if (btnToggleEdit) {
+    btnToggleEdit.addEventListener("click", () => {
+      const viewEl = document.getElementById("adr-modal-view");
+      const editEl = document.getElementById("adr-modal-edit");
+      if (editEl.style.display === "none") {
+        viewEl.style.display = "none";
+        editEl.style.display = "flex";
+        btnToggleEdit.textContent = "Preview";
+        document.getElementById("adr-edit-content").focus();
+      } else {
+        editEl.style.display = "none";
+        viewEl.style.display = "flex";
+        btnToggleEdit.textContent = "Edit";
+      }
+    });
+  }
+
+  if (btnCancelEdit) {
+    btnCancelEdit.addEventListener("click", () => {
+      if (isAdrModalCreateMode) {
+        closeAdrModal();
+      } else {
+        const viewEl = document.getElementById("adr-modal-view");
+        const editEl = document.getElementById("adr-modal-edit");
+        editEl.style.display = "none";
+        viewEl.style.display = "flex";
+        if (btnToggleEdit) btnToggleEdit.textContent = "Edit";
+      }
+    });
+  }
+
+  if (btnSave) {
+    btnSave.addEventListener("click", async () => {
+      const content = document.getElementById("adr-edit-content").value.trim();
+      if (!content) {
+        alert("ADR content cannot be empty.");
+        return;
+      }
+
+      btnSave.disabled = true;
+      btnSave.textContent = "Saving...";
+
+      try {
+        if (isAdrModalCreateMode) {
+          const filename = document.getElementById("adr-edit-filename").value.trim();
+          if (!filename) {
+            alert("Please specify a filename (e.g. 046-my-decision.md).");
+            btnSave.disabled = false;
+            btnSave.textContent = "Save ADR";
+            return;
+          }
+          const res = await fetch("/api/adr", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename, content })
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Failed to create ADR");
+          }
+          await initMemory();
+          closeAdrModal();
+        } else {
+          const res = await fetch(`/api/adr/${encodeURIComponent(currentModalAdrId)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content })
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Failed to update ADR");
+          }
+          await initMemory();
+          await openAdrModal(currentModalAdrId, false);
+        }
+      } catch (err) {
+        alert("Error saving ADR: " + err.message);
+      } finally {
+        btnSave.disabled = false;
+        btnSave.textContent = "Save ADR";
+      }
+    });
+  }
+
+  if (btnDelete) {
+    btnDelete.addEventListener("click", async () => {
+      if (!currentModalAdrId) return;
+      const title = currentModalAdrData ? currentModalAdrData.title : currentModalAdrId;
+      if (!confirm(`Are you sure you want to delete ${title}?\n\nThis will remove the file from docs/adr/ and rebuild the temporal memory graph.`)) {
+        return;
+      }
+
+      btnDelete.disabled = true;
+      btnDelete.textContent = "Deleting...";
+
+      try {
+        const res = await fetch(`/api/adr/${encodeURIComponent(currentModalAdrId)}`, {
+          method: "DELETE"
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Failed to delete ADR");
+        }
+        await initMemory();
+        closeAdrModal();
+      } catch (err) {
+        alert("Error deleting ADR: " + err.message);
+      } finally {
+        btnDelete.disabled = false;
+        btnDelete.textContent = "Delete";
+      }
+    });
+  }
+}
+
+function closeAdrModal() {
+  const backdrop = document.getElementById("adr-modal-backdrop");
+  if (backdrop) backdrop.style.display = "none";
+  currentModalAdrId = null;
+  currentModalAdrData = null;
+  isAdrModalCreateMode = false;
+}
+
+async function openAdrModal(adrId, isCreate = false) {
+  const backdrop = document.getElementById("adr-modal-backdrop");
+  const titleEl = document.getElementById("adr-modal-title");
+  const badgeEl = document.getElementById("adr-modal-badge");
+  const viewEl = document.getElementById("adr-modal-view");
+  const editEl = document.getElementById("adr-modal-edit");
+  const btnToggleEdit = document.getElementById("btn-adr-toggle-edit");
+  const btnDelete = document.getElementById("btn-adr-delete");
+  const filenameRow = document.getElementById("adr-create-filename-row");
+  const filenameInput = document.getElementById("adr-edit-filename");
+  const contentInput = document.getElementById("adr-edit-content");
+
+  if (!backdrop) return;
+
+  isAdrModalCreateMode = isCreate;
+  currentModalAdrId = adrId;
+
+  if (isCreate) {
+    titleEl.textContent = "Create New Architecture Decision (ADR)";
+    badgeEl.textContent = "New (Draft)";
+    badgeEl.className = "status-badge blue";
+    if (btnToggleEdit) btnToggleEdit.style.display = "none";
+    if (btnDelete) btnDelete.style.display = "none";
+    if (filenameRow) filenameRow.style.display = "flex";
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    filenameInput.value = "046-new-architecture-decision.md";
+    contentInput.value = `# ADR-046: New Architecture Decision
+
+- Status: Accepted
+- Date: ${dateStr}
+- Supersedes: None
+- Tags: architecture, security, production
+
+## Decision
+Describe the architectural rule, function call standards, or library constraints here.
+
+## Required
+- required_symbol_or_keyword
+
+## Forbidden
+- deprecated_or_insecure_symbol
+`;
+
+    viewEl.style.display = "none";
+    editEl.style.display = "flex";
+    backdrop.style.display = "flex";
+    return;
+  }
+
+  // Load existing ADR
+  if (btnToggleEdit) {
+    btnToggleEdit.style.display = "inline-block";
+    btnToggleEdit.textContent = "Edit";
+  }
+  if (btnDelete) {
+    btnDelete.style.display = "inline-block";
+  }
+  if (filenameRow) {
+    filenameRow.style.display = "none";
+  }
+
+  viewEl.style.display = "flex";
+  editEl.style.display = "none";
+
+  titleEl.textContent = "Loading ADR...";
+  backdrop.style.display = "flex";
+
+  try {
+    const res = await fetch(`/api/adr/${encodeURIComponent(adrId)}`);
+    if (!res.ok) throw new Error("ADR not found");
+    const data = await res.json();
+    currentModalAdrData = data;
+
+    titleEl.textContent = data.title || data.filename;
+    
+    if (data.epistemic_status === "superseded") {
+      badgeEl.textContent = "Superseded (Banned)";
+      badgeEl.className = "status-badge red";
+    } else {
+      badgeEl.textContent = "In Force (Active)";
+      badgeEl.className = "status-badge green";
+    }
+
+    document.getElementById("adr-view-file").textContent = `docs/adr/${data.filename}`;
+    document.getElementById("adr-view-date").textContent = data.date || "None";
+    document.getElementById("adr-view-tags").textContent = (data.tags && data.tags.length > 0) ? data.tags.join(", ") : "None";
+    document.getElementById("adr-view-decision").textContent = data.description || "No decision statement found.";
+
+    const reqContainer = document.getElementById("adr-view-required");
+    reqContainer.innerHTML = "";
+    if (data.required && data.required.length > 0) {
+      data.required.forEach(item => {
+        const span = document.createElement("span");
+        span.className = "adr-token-pill required";
+        span.textContent = item;
+        reqContainer.appendChild(span);
+      });
+    } else {
+      reqContainer.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">None</span>';
+    }
+
+    const forbContainer = document.getElementById("adr-view-forbidden");
+    forbContainer.innerHTML = "";
+    if (data.forbidden && data.forbidden.length > 0) {
+      data.forbidden.forEach(item => {
+        const span = document.createElement("span");
+        span.className = "adr-token-pill forbidden";
+        span.textContent = item;
+        forbContainer.appendChild(span);
+      });
+    } else {
+      forbContainer.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">None</span>';
+    }
+
+    document.getElementById("adr-view-raw").textContent = data.content || "";
+    contentInput.value = data.content || "";
+
+  } catch (err) {
+    titleEl.textContent = "Error loading ADR";
+    document.getElementById("adr-view-decision").textContent = err.message;
+  }
+}
+
 async function initMemory() {
   try {
     const res = await fetch("/api/memory");
@@ -241,7 +522,15 @@ async function initMemory() {
         .filter(item => item.type === "architecture_decision")
         .forEach(item => {
           const li = document.createElement("li");
-          li.textContent = item.label || item.id;
+          li.className = "memory-adr-item";
+          li.dataset.adrId = item.id;
+          li.innerHTML = `
+            <span>${escapeHtml(item.label || item.id)}</span>
+            <div class="adr-item-meta">
+              <span class="adr-item-click-hint">View / Edit →</span>
+            </div>
+          `;
+          li.addEventListener("click", () => openAdrModal(item.id));
           inForceList.appendChild(li);
         });
     }
@@ -253,7 +542,15 @@ async function initMemory() {
         .filter(item => item.type === "architecture_decision")
         .forEach(item => {
           const li = document.createElement("li");
-          li.textContent = item.label || item.id;
+          li.className = "memory-adr-item";
+          li.dataset.adrId = item.id;
+          li.innerHTML = `
+            <span>${escapeHtml(item.label || item.id)}</span>
+            <div class="adr-item-meta">
+              <span class="adr-item-click-hint">View / Edit →</span>
+            </div>
+          `;
+          li.addEventListener("click", () => openAdrModal(item.id));
           supersededList.appendChild(li);
         });
     }
