@@ -204,21 +204,25 @@ async function initMemory() {
     const inForceList = document.getElementById("memory-in-force");
     if (inForceList) {
       inForceList.innerHTML = "";
-      (data.in_force || []).forEach(item => {
-        const li = document.createElement("li");
-        li.textContent = item.label || item.id;
-        inForceList.appendChild(li);
-      });
+      (data.in_force || [])
+        .filter(item => item.type === "architecture_decision")
+        .forEach(item => {
+          const li = document.createElement("li");
+          li.textContent = item.label || item.id;
+          inForceList.appendChild(li);
+        });
     }
 
     const supersededList = document.getElementById("memory-superseded");
     if (supersededList) {
       supersededList.innerHTML = "";
-      (data.superseded || []).forEach(item => {
-        const li = document.createElement("li");
-        li.textContent = item.label || item.id;
-        supersededList.appendChild(li);
-      });
+      (data.superseded || [])
+        .filter(item => item.type === "architecture_decision")
+        .forEach(item => {
+          const li = document.createElement("li");
+          li.textContent = item.label || item.id;
+          supersededList.appendChild(li);
+        });
     }
 
     const notesList = document.getElementById("memory-notes");
