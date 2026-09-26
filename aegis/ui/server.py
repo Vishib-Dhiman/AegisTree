@@ -370,6 +370,15 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         for neg in route.negative_nodes
     ]
 
+    target_rel = "vault/store.py"
+    try:
+        if target_file.is_relative_to(workspace_root):
+            target_rel = str(target_file.relative_to(workspace_root))
+        else:
+            target_rel = target_file.name
+    except Exception:
+        target_rel = target_file.name
+
     return {
         "run_id": run_id,
         "status": "ready",
@@ -396,6 +405,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
             "baseline": baseline_tokens,
             "estimator": "chars/4",
         },
+        "target_file": target_rel,
         "baseline": baseline_data,
         "aegis": aegis_data,
         "tool_log": tool_log,

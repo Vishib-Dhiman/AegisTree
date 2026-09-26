@@ -527,139 +527,81 @@ function renderAssistantResponse(container, data, promptText) {
     return;
   }
 
-  // 5. Code & Unified Diff Card with Side-by-Side Tabs
+  // 5. Unified Code & Review Card (Human-in-the-Loop Gate)
   const codeCard = document.createElement("div");
-  codeCard.className = "code-card";
+  codeCard.className = "code-card unified-review-card";
 
   const aegisDiff = data.aegis ? (data.aegis.diff || data.aegis.code || data.aegis.text) : "";
   const baselineDiff = data.baseline ? (data.baseline.diff || data.baseline.code || data.baseline.text) : "";
+  const editableCode = (data.aegis && data.aegis.code) ? data.aegis.code : (aegisDiff || "");
 
   codeCard.dataset.aegisDiff = aegisDiff;
   codeCard.dataset.baselineDiff = baselineDiff;
   codeCard.dataset.aegisMeta = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
   codeCard.dataset.baselineMeta = `Raw Baseline: ${data.tokens ? data.tokens.baseline : 0} tokens · ${Math.round(data.baseline ? data.baseline.latency_ms : 0)}ms`;
 
+  // Extract removed lines from diff (lines starting with - but not ---)
+  const diffLines = aegisDiff.split("\n");
+  const delLines = diffLines.filter(line => line.startsWith("-") && !line.startsWith("---"));
+
+  const targetFileLabel = data.target_file || "vault/store.py";
+  const isUnparseable = data.aegis && data.aegis.unparseable;
+
   codeCard.innerHTML = `
     <div class="code-card-header">
-      <div class="code-tabs">
-        <button class="code-tab-btn active" id="tab-aegis">AegisTree Patch (Compliant)</button>
-        <button class="code-tab-btn" id="tab-baseline">Raw LLM Baseline (Legacy Bug)</button>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:600; font-size:13px; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
+          <span style="color:var(--accent-green); font-size:11px;">●</span> AegisTree Patch (Compliant)
+        </span>
+        <span class="file-badge">${escapeHtml(targetFileLabel)}</span>
+        <span class="review-hint" style="font-size:11.5px; color:var(--text-muted); margin-left:4px;">Tip: edit retries or timeout_s to train organizational memory</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
-        <button class="code-inspector-link" id="btn-card-inspect" title="Open side-by-side Diff Inspector">🔍 Diff Inspector</button>
         <span class="code-meta" id="code-meta-text">Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens &middot; ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms</span>
       </div>
     </div>
-    <div class="diff-display" id="diff-content-view"></div>
+    <div class="unified-diff-editor">
+      ${delLines.length > 0 ? `
+        <div class="diff-removed-block">
+          <div class="diff-removed-banner-header">
+            <span>− Removed Lines (Read-Only)</span>
+          </div>
+          <div class="diff-removed-lines">
+            ${delLines.map(l => `<div class="diff-del-row">${escapeHtml(l)}</div>`).join("")}
+          </div>
+        </div>
+      ` : ""}
+      <div class="diff-editable-header">
+        <span>+ Proposed Implementation (Editable &middot; Human-in-the-Loop)</span>
+      </div>
+      <textarea class="unified-code-editor review-textarea" id="review-code-input" spellcheck="false">${escapeHtml(editableCode)}</textarea>
+    </div>
+    <div class="unified-card-footer">
+      <span id="review-status-msg" style="font-size:12.5px; color:var(--text-muted);">${isUnparseable ? "Unparseable output - cannot commit." : "Ready to commit via FastMCP."}</span>
+      <button class="btn-approve" id="btn-approve-action" ${isUnparseable ? "disabled" : ""}>Approve &amp; Commit</button>
+    </div>
   `;
 
-  const diffView = codeCard.querySelector("#diff-content-view");
-  const tabAegis = codeCard.querySelector("#tab-aegis");
-  const tabBaseline = codeCard.querySelector("#tab-baseline");
-  const metaText = codeCard.querySelector("#code-meta-text");
-  const btnCardInspect = codeCard.querySelector("#btn-card-inspect");
+  const reviewInput = codeCard.querySelector("#review-code-input");
+  const btnApprove = codeCard.querySelector("#btn-approve-action");
+  const statusMsg = codeCard.querySelector("#review-status-msg");
 
-  if (btnCardInspect) {
-    btnCardInspect.addEventListener("click", () => setAppMode("diff"));
-  }
-
-  function showAegisTab() {
-    tabAegis.classList.add("active");
-    tabBaseline.classList.remove("active");
-    renderDiffLines(diffView, aegisDiff);
-    metaText.textContent = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
-  }
-
-  function showBaselineTab() {
-    tabBaseline.classList.add("active");
-    tabAegis.classList.remove("active");
-    renderDiffLines(diffView, baselineDiff);
-    metaText.textContent = `Raw Baseline: ${data.tokens ? data.tokens.baseline : 0} tokens · ${Math.round(data.baseline ? data.baseline.latency_ms : 0)}ms`;
-  }
-
-  tabAegis.addEventListener("click", showAegisTab);
-  tabBaseline.addEventListener("click", showBaselineTab);
-  showAegisTab();
-
-  container.appendChild(codeCard);
-
-  // 6. Human-in-the-Loop Review Box
-  if (data.aegis && data.aegis.code && !data.aegis.unparseable) {
-    const reviewPanel = document.createElement("div");
-    reviewPanel.className = "review-panel";
-    reviewPanel.innerHTML = `
-      <div class="review-panel-header">
-        <span class="review-title">Human-in-the-Loop Review (FastMCP Gate)</span>
-        <span class="review-hint">Tip: edit retries=3 to retries=1 to train organizational memory</span>
-      </div>
-      <textarea class="review-textarea" id="review-code-input">${escapeHtml(data.aegis.code)}</textarea>
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <span id="review-status-msg" style="font-size:12.5px; color:var(--text-muted);">Ready to commit via FastMCP.</span>
-        <button class="btn-approve" id="btn-approve-action">Approve &amp; Commit</button>
-      </div>
-    `;
-
-    const btnApprove = reviewPanel.querySelector("#btn-approve-action");
-    const reviewInput = reviewPanel.querySelector("#review-code-input");
-    const statusMsg = reviewPanel.querySelector("#review-status-msg");
-
-    // Auto-resize review textarea to prevent awkward nested scroll capture
+  if (reviewInput) {
     setTimeout(() => {
       reviewInput.style.height = "auto";
-      reviewInput.style.height = Math.max(90, reviewInput.scrollHeight + 8) + "px";
+      reviewInput.style.height = Math.max(110, reviewInput.scrollHeight + 8) + "px";
     }, 20);
     reviewInput.addEventListener("input", () => {
       reviewInput.style.height = "auto";
-      reviewInput.style.height = Math.max(90, reviewInput.scrollHeight + 8) + "px";
+      reviewInput.style.height = Math.max(110, reviewInput.scrollHeight + 8) + "px";
     });
-
-    btnApprove.addEventListener("click", async () => {
-      btnApprove.disabled = true;
-      btnApprove.textContent = "Committing...";
-
-      try {
-        const resp = await fetch("/api/approve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            run_id: currentRunId,
-            approved_code: reviewInput.value
-          })
-        });
-
-        const resData = await resp.json();
-
-        if (resp.ok && resData.applied) {
-          btnApprove.textContent = "Approved ✓";
-          btnApprove.style.background = "#059669";
-          statusMsg.innerHTML = `<span style="color:var(--accent-green); font-weight:600;">✓ Patch Committed &middot; Receipt #${resData.receipt_id}</span>`;
-
-          if (resData.habit_label) {
-            const habitAlert = document.createElement("div");
-            habitAlert.className = "habit-badge-alert";
-            habitAlert.innerHTML = `
-              <span class="sparkle-mini">✦</span>
-              <span><strong>New Habit Synthesized:</strong> ${escapeHtml(resData.habit_label)}</span>
-            `;
-            reviewPanel.appendChild(habitAlert);
-            scrollToBottom(true);
-          }
-          initMemory();
-          snapshotActiveThread();
-        } else {
-          statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(resData.detail || resData.reason || "Refused")}</span>`;
-          btnApprove.disabled = false;
-          btnApprove.textContent = "Approve & Commit";
-        }
-      } catch (err) {
-        statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(err.message)}</span>`;
-        btnApprove.disabled = false;
-        btnApprove.textContent = "Approve & Commit";
-      }
-    });
-
-    container.appendChild(reviewPanel);
   }
+
+  if (btnApprove && !btnApprove.disabled && reviewInput) {
+    attachApproveHandler(codeCard, btnApprove, reviewInput, statusMsg);
+  }
+
+  container.appendChild(codeCard);
 
   snapshotActiveThread();
   scrollToBottom(true);
@@ -845,6 +787,62 @@ function deleteThread(threadId) {
   }
 }
 
+function attachApproveHandler(card, btnApprove, reviewInput, statusMsg) {
+  if (!btnApprove || !reviewInput) return;
+  if (btnApprove.disabled) return;
+
+  btnApprove.onclick = async () => {
+    btnApprove.disabled = true;
+    btnApprove.textContent = "Committing...";
+
+    try {
+      const resp = await fetch("/api/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          run_id: currentRunId,
+          approved_code: reviewInput.value
+        })
+      });
+
+      const resData = await resp.json();
+
+      if (resp.ok && resData.applied) {
+        btnApprove.textContent = "Approved ✓";
+        btnApprove.style.background = "#059669";
+        if (statusMsg) {
+          statusMsg.innerHTML = `<span style="color:var(--accent-green); font-weight:600;">✓ Patch Committed &middot; Receipt #${resData.receipt_id}</span>`;
+        }
+
+        if (resData.habit_label) {
+          const habitAlert = document.createElement("div");
+          habitAlert.className = "habit-badge-alert";
+          habitAlert.innerHTML = `
+            <span class="sparkle-mini">✦</span>
+            <span><strong>New Habit Synthesized:</strong> ${escapeHtml(resData.habit_label)}</span>
+          `;
+          card.appendChild(habitAlert);
+          scrollToBottom(true);
+        }
+        initMemory();
+        snapshotActiveThread();
+      } else {
+        if (statusMsg) {
+          statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(resData.detail || resData.reason || "Refused")}</span>`;
+        }
+        btnApprove.disabled = false;
+        btnApprove.textContent = "Approve & Commit";
+      }
+    } catch (err) {
+      if (statusMsg) {
+        statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(err.message)}</span>`;
+      }
+      btnApprove.disabled = false;
+      btnApprove.textContent = "Approve & Commit";
+    }
+  };
+}
+
 function rebindThreadCards(container) {
   if (!container) return;
 
@@ -886,70 +884,35 @@ function rebindThreadCards(container) {
         }
       };
     }
+
+    // Rebind Unified Review Card inside code-card
+    const btnApprove = card.querySelector(".btn-approve");
+    const reviewInput = card.querySelector(".review-textarea, .unified-code-editor");
+    const statusMsg = card.querySelector("#review-status-msg");
+    if (btnApprove && !btnApprove.disabled && reviewInput) {
+      attachApproveHandler(card, btnApprove, reviewInput, statusMsg);
+    }
   });
 
-  // Rebind code-inspector-link
+  // Rebind legacy code-inspector-link if present in old cached threads
   container.querySelectorAll(".code-inspector-link").forEach(btn => {
     btn.onclick = () => setAppMode("diff");
   });
 
-  // 3. Rebind Review Panel and Approve action if not yet approved
+  // 3. Rebind Legacy Review Panels (for threads saved before unification)
   container.querySelectorAll(".review-panel").forEach(panel => {
     const btnApprove = panel.querySelector(".btn-approve");
     const reviewInput = panel.querySelector(".review-textarea");
     const statusMsg = panel.querySelector("#review-status-msg");
     if (btnApprove && !btnApprove.disabled && reviewInput) {
-      btnApprove.onclick = async () => {
-        btnApprove.disabled = true;
-        btnApprove.textContent = "Committing...";
-
-        try {
-          const resp = await fetch("/api/approve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              run_id: currentRunId,
-              approved_code: reviewInput.value
-            })
-          });
-
-          const resData = await resp.json();
-
-          if (resp.ok && resData.applied) {
-            btnApprove.textContent = "Approved ✓";
-            btnApprove.style.background = "#059669";
-            if (statusMsg) statusMsg.innerHTML = `<span style="color:var(--accent-green); font-weight:600;">✓ Patch Committed &middot; Receipt #${resData.receipt_id}</span>`;
-
-            if (resData.habit_label) {
-              const habitAlert = document.createElement("div");
-              habitAlert.className = "habit-badge-alert";
-              habitAlert.innerHTML = `
-                <span class="sparkle-mini">✦</span>
-                <span><strong>New Habit Synthesized:</strong> ${escapeHtml(resData.habit_label)}</span>
-              `;
-              panel.appendChild(habitAlert);
-              scrollToBottom(true);
-            }
-            initMemory();
-            snapshotActiveThread();
-          } else {
-            if (statusMsg) statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(resData.detail || resData.reason || "Refused")}</span>`;
-            btnApprove.disabled = false;
-            btnApprove.textContent = "Approve & Commit";
-          }
-        } catch (err) {
-          if (statusMsg) statusMsg.innerHTML = `<span style="color:var(--accent-red);">${escapeHtml(err.message)}</span>`;
-          btnApprove.disabled = false;
-          btnApprove.textContent = "Approve & Commit";
-        }
-      };
+      attachApproveHandler(panel, btnApprove, reviewInput, statusMsg);
     }
   });
 
   // 4. Auto-size review textareas
-  container.querySelectorAll(".review-textarea").forEach(ta => {
+  container.querySelectorAll(".review-textarea, .unified-code-editor").forEach(ta => {
     ta.style.height = "auto";
-    ta.style.height = Math.max(90, ta.scrollHeight + 8) + "px";
+    ta.style.height = Math.max(110, ta.scrollHeight + 8) + "px";
   });
 }
 

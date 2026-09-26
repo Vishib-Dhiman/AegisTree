@@ -891,26 +891,14 @@ body {
   padding: 0 18px;
 }
 
-.code-inspector-link {
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  color: var(--accent-cyan);
-  font-family: inherit;
+.file-badge {
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  font-weight: 500;
-  padding: 3px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.code-inspector-link:hover {
-  background: rgba(56, 189, 248, 0.2);
-  color: #fff;
-  border-color: rgba(56, 189, 248, 0.5);
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 7px;
+  border-radius: 4px;
 }
 
 /* Dedicated Side-by-Side Diff Inspector View */
@@ -1144,6 +1132,90 @@ body {
   max-width: 440px;
 }
 
+/* Unified Diff & Human-in-the-Loop Review */
+.unified-diff-editor {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: #0d1117;
+  overflow: hidden;
+  margin: 10px 14px 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-removed-block {
+  background: rgba(239, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+  user-select: none;
+}
+
+.diff-removed-banner-header {
+  padding: 6px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fca5a5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+
+.diff-removed-lines {
+  padding: 2px 0 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.diff-del-row {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.14);
+  padding: 2px 14px;
+  white-space: pre;
+}
+
+.diff-editable-header {
+  padding: 7px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6ee7b7;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: rgba(16, 185, 129, 0.05);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.15);
+  font-family: var(--font-mono);
+  user-select: none;
+}
+
+.unified-code-editor {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 10px 14px;
+  color: #e5e7eb;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 110px;
+  outline: none;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.unified-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 14px;
+  margin-top: 6px;
+}
+
 /* Human-in-the-Loop Review Area */
 .review-panel {
   background: rgba(255, 255, 255, 0.02);
@@ -1215,6 +1287,7 @@ body {
   border: 1px solid rgba(16, 185, 129, 0.35);
   border-radius: 8px;
   padding: 10px 14px;
+  margin: 8px 14px 14px;
   color: #34d399;
   font-size: 13px;
   display: flex;
