@@ -201,7 +201,7 @@
 
         <div class="top-nav-center">
           <div class="mode-switcher-pill">
-            <button class="mode-pill-btn active">Chat</button>
+            <button id="btn-mode-chat" class="mode-pill-btn active">Chat</button>
             <button id="btn-toggle-diff-mode" class="mode-pill-btn">Diff Inspector</button>
           </div>
         </div>
@@ -271,6 +271,11 @@
 
         <!-- Dynamic Message Stream -->
         <div id="messages-stream" class="messages-stream" style="display: none;">
+          <!-- Injected dynamically by app.js -->
+        </div>
+
+        <!-- Dedicated Side-by-Side Diff Inspector View -->
+        <div id="diff-inspector-view" class="diff-inspector-view" style="display: none;">
           <!-- Injected dynamically by app.js -->
         </div>
 

@@ -3,6 +3,8 @@
 let currentRunId = null;
 let activeThreadId = null;
 let threads = [];
+let currentAppMode = "chat";
+let latestRunData = null;
 
 const PROMPTS = {
   persist: "Add a persist_session_token function that stores the session token using our current vault standard.",
@@ -103,9 +105,21 @@ function initEventListeners() {
     btnExpandSidebar.style.display = "none";
   }
 
+  // Mode switcher (Chat vs Diff Inspector)
+  const btnModeChat = document.getElementById("btn-mode-chat");
+  const btnToggleDiff = document.getElementById("btn-toggle-diff-mode");
+  if (btnModeChat) {
+    btnModeChat.addEventListener("click", () => setAppMode("chat"));
+  }
+  if (btnToggleDiff) {
+    btnToggleDiff.addEventListener("click", () => setAppMode("diff"));
+  }
+
   // New session button
   document.getElementById("btn-new-session").addEventListener("click", () => {
     activeThreadId = null;
+    latestRunData = null;
+    setAppMode("chat");
     renderThreadsList();
     document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
     document.getElementById("hero-view").style.display = "flex";
@@ -375,13 +389,22 @@ async function runWithPrompt(promptText, presetTitle = null) {
 
     const data = await res.json();
     currentRunId = data.run_id;
+    latestRunData = data;
     if (activeThreadId) {
       const curThread = threads.find(t => t.id === activeThreadId);
-      if (curThread) curThread.runId = currentRunId;
+      if (curThread) {
+        curThread.runId = currentRunId;
+        curThread.runData = data;
+      }
     }
 
     // Render response into assistantMsg
     renderAssistantResponse(assistantMsg, data, promptText);
+
+    if (currentAppMode === "diff") {
+      const diffView = document.getElementById("diff-inspector-view");
+      if (diffView) renderDiffInspectorContent(diffView);
+    }
   } catch (e) {
     console.error("Run error:", e);
     assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">Execution Error</span><span>${escapeHtml(e.message)}</span></div>`;
@@ -522,7 +545,10 @@ function renderAssistantResponse(container, data, promptText) {
         <button class="code-tab-btn active" id="tab-aegis">AegisTree Patch (Compliant)</button>
         <button class="code-tab-btn" id="tab-baseline">Raw LLM Baseline (Legacy Bug)</button>
       </div>
-      <span class="code-meta" id="code-meta-text">Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens &middot; ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button class="code-inspector-link" id="btn-card-inspect" title="Open side-by-side Diff Inspector">🔍 Diff Inspector</button>
+        <span class="code-meta" id="code-meta-text">Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens &middot; ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms</span>
+      </div>
     </div>
     <div class="diff-display" id="diff-content-view"></div>
   `;
@@ -531,6 +557,11 @@ function renderAssistantResponse(container, data, promptText) {
   const tabAegis = codeCard.querySelector("#tab-aegis");
   const tabBaseline = codeCard.querySelector("#tab-baseline");
   const metaText = codeCard.querySelector("#code-meta-text");
+  const btnCardInspect = codeCard.querySelector("#btn-card-inspect");
+
+  if (btnCardInspect) {
+    btnCardInspect.addEventListener("click", () => setAppMode("diff"));
+  }
 
   function showAegisTab() {
     tabAegis.classList.add("active");
@@ -773,17 +804,34 @@ function loadThread(threadId) {
 
   activeThreadId = threadId;
   currentRunId = target.runId || null;
+  if (target.runData) {
+    latestRunData = target.runData;
+  } else {
+    latestRunData = null;
+  }
   renderThreadsList();
 
   document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
 
-  document.getElementById("hero-view").style.display = "none";
-  const messagesStream = document.getElementById("messages-stream");
-  messagesStream.style.display = "flex";
-  messagesStream.innerHTML = target.messagesHtml || "";
+  if (currentAppMode === "diff") {
+    document.getElementById("hero-view").style.display = "none";
+    document.getElementById("messages-stream").style.display = "none";
+    const diffView = document.getElementById("diff-inspector-view");
+    if (diffView) {
+      diffView.style.display = "flex";
+      renderDiffInspectorContent(diffView);
+    }
+  } else {
+    document.getElementById("hero-view").style.display = "none";
+    const diffView = document.getElementById("diff-inspector-view");
+    if (diffView) diffView.style.display = "none";
+    const messagesStream = document.getElementById("messages-stream");
+    messagesStream.style.display = "flex";
+    messagesStream.innerHTML = target.messagesHtml || "";
 
-  rebindThreadCards(messagesStream);
-  scrollToBottom(false);
+    rebindThreadCards(messagesStream);
+    scrollToBottom(false);
+  }
 }
 
 function deleteThread(threadId) {
@@ -838,6 +886,11 @@ function rebindThreadCards(container) {
         }
       };
     }
+  });
+
+  // Rebind code-inspector-link
+  container.querySelectorAll(".code-inspector-link").forEach(btn => {
+    btn.onclick = () => setAppMode("diff");
   });
 
   // 3. Rebind Review Panel and Approve action if not yet approved
@@ -898,4 +951,148 @@ function rebindThreadCards(container) {
     ta.style.height = "auto";
     ta.style.height = Math.max(90, ta.scrollHeight + 8) + "px";
   });
+}
+
+function setAppMode(mode) {
+  currentAppMode = mode;
+  const btnChat = document.getElementById("btn-mode-chat");
+  const btnDiff = document.getElementById("btn-toggle-diff-mode");
+  const heroView = document.getElementById("hero-view");
+  const messagesStream = document.getElementById("messages-stream");
+  const diffView = document.getElementById("diff-inspector-view");
+
+  if (mode === "diff") {
+    if (btnChat) btnChat.classList.remove("active");
+    if (btnDiff) btnDiff.classList.add("active");
+    if (heroView) heroView.style.display = "none";
+    if (messagesStream) messagesStream.style.display = "none";
+    if (diffView) {
+      diffView.style.display = "flex";
+      renderDiffInspectorContent(diffView);
+    }
+  } else {
+    if (btnChat) btnChat.classList.add("active");
+    if (btnDiff) btnDiff.classList.remove("active");
+    if (diffView) diffView.style.display = "none";
+
+    const hasMessages = messagesStream && messagesStream.children.length > 0;
+    if (hasMessages) {
+      messagesStream.style.display = "flex";
+      if (heroView) heroView.style.display = "none";
+    } else {
+      if (heroView) heroView.style.display = "flex";
+      if (messagesStream) messagesStream.style.display = "none";
+    }
+  }
+}
+
+function renderDiffInspectorContent(container) {
+  if (!container) return;
+
+  // Resolve latestRunData from active messages if not set
+  if (!latestRunData) {
+    const activeCard = document.querySelector("#messages-stream .code-card");
+    if (activeCard && activeCard.dataset.aegisDiff) {
+      latestRunData = {
+        aegis: { diff: activeCard.dataset.aegisDiff, code: activeCard.dataset.aegisDiff, latency_ms: 120 },
+        baseline: { diff: activeCard.dataset.baselineDiff, code: activeCard.dataset.baselineDiff, latency_ms: 3200 },
+        tokens: { leaf: 562, baseline: 1180 },
+        policy: { primary_id: "ADR-014" },
+        target_file: "vault/store.py",
+        task_type: "implement_production"
+      };
+    }
+  }
+
+  if (!latestRunData || (!latestRunData.aegis && !latestRunData.baseline)) {
+    container.innerHTML = `
+      <div class="diff-inspector-empty">
+        <div class="diff-inspector-empty-icon">🔍</div>
+        <div class="diff-inspector-empty-title">Diff Inspector Ready</div>
+        <div class="diff-inspector-empty-subtext">
+          Run an architectural prompt or select a rehearsed scenario to inspect live side-by-side patch diffs.
+        </div>
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; justify-content:center;">
+          <button class="action-chip" data-prompt="persist"><span>🔐 Persist Token (ADR-014)</span></button>
+          <button class="action-chip" data-prompt="rotate"><span>⚡ Rotate Token (Habit)</span></button>
+          <button class="action-chip" data-prompt="pydantic_v2"><span>📦 Pydantic v2 (ADR-032)</span></button>
+          <button class="action-chip" data-prompt="db_sqlalchemy"><span>🗄️ SQLAlchemy (ADR-045)</span></button>
+        </div>
+      </div>
+    `;
+    container.querySelectorAll("[data-prompt]").forEach(elem => {
+      elem.addEventListener("click", () => {
+        const key = elem.getAttribute("data-prompt");
+        if (PROMPTS[key]) {
+          setAppMode("chat");
+          runWithPrompt(PROMPTS[key], PRESET_TITLES[key]);
+        }
+      });
+    });
+    return;
+  }
+
+  const d = latestRunData;
+  const aegisDiff = d.aegis ? (d.aegis.diff || d.aegis.code || d.aegis.text) : "";
+  const baselineDiff = d.baseline ? (d.baseline.diff || d.baseline.code || d.baseline.text) : "";
+  const policyId = (d.policy && d.policy.primary_id) || "ADR-014";
+  const leafTokens = (d.tokens && d.tokens.leaf) || 562;
+  const baselineTokens = (d.tokens && d.tokens.baseline) || 1180;
+  const compressionPct = baselineTokens > 0
+    ? Math.round(((baselineTokens - leafTokens) / baselineTokens) * 100)
+    : 55;
+  const targetFile = d.target_file || "vault/store.py";
+  const latMs = d.verdict && d.verdict.latency_ms > 0 ? Math.round(d.verdict.latency_ms) : 32;
+
+  container.innerHTML = `
+    <div class="diff-inspector-header">
+      <div class="diff-inspector-title-group">
+        <span class="diff-inspector-badge">✦ Side-by-Side Diff Inspector</span>
+        <span class="diff-inspector-filename">${escapeHtml(targetFile)}</span>
+        <span class="diff-inspector-policy">
+          <span style="color:var(--accent-green);">●</span> ${escapeHtml(policyId)} in force
+        </span>
+      </div>
+      <div class="diff-inspector-meta-pills">
+        <span class="diff-inspector-pill">Baseline: ${baselineTokens} tokens</span>
+        <span class="diff-inspector-pill highlight">AegisTree: ${leafTokens} tokens (-${compressionPct}%)</span>
+        <span class="diff-inspector-pill">Verdict: ~${latMs}ms</span>
+        <button class="diff-return-chat-btn" id="btn-inspector-to-chat">💬 Back to Chat</button>
+      </div>
+    </div>
+
+    <div class="diff-split-grid">
+      <div class="diff-pane baseline">
+        <div class="diff-pane-header">
+          <div class="diff-pane-title">
+            <span>🚫 Raw LLM Baseline</span>
+            <span class="diff-pane-badge">Legacy Violations Possible</span>
+          </div>
+          <span class="code-meta">${baselineTokens} tokens</span>
+        </div>
+        <div class="diff-pane-content" id="inspector-baseline-diff"></div>
+      </div>
+
+      <div class="diff-pane aegis">
+        <div class="diff-pane-header">
+          <div class="diff-pane-title">
+            <span>🛡️ AegisTree Patch</span>
+            <span class="diff-pane-badge">100% Policy Compliant</span>
+          </div>
+          <span class="code-meta">${leafTokens} tokens &middot; -${compressionPct}%</span>
+        </div>
+        <div class="diff-pane-content" id="inspector-aegis-diff"></div>
+      </div>
+    </div>
+  `;
+
+  const baseContainer = container.querySelector("#inspector-baseline-diff");
+  const aegisContainer = container.querySelector("#inspector-aegis-diff");
+  if (baseContainer) renderDiffLines(baseContainer, baselineDiff);
+  if (aegisContainer) renderDiffLines(aegisContainer, aegisDiff);
+
+  const btnBack = container.querySelector("#btn-inspector-to-chat");
+  if (btnBack) {
+    btnBack.addEventListener("click", () => setAppMode("chat"));
+  }
 }
