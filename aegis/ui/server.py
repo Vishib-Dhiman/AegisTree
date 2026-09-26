@@ -92,12 +92,14 @@ def get_health() -> Dict[str, Any]:
         verdict_error = "Decision model unavailable. Keyword rule used."
 
     ollama_ok = generator.is_available()
+    installed_models = getattr(generator, "get_installed_models", lambda: [])()
 
     return {
         "verdict_loaded": verdict_loaded,
         "verdict_error": verdict_error,
         "ollama_ok": ollama_ok,
         "model": config_manager.config.system2_model,
+        "installed_models": installed_models,
         "offline_env": True,
     }
 
@@ -320,9 +322,9 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
             "latency_ms": base_gen.latency_ms,
             "unparseable": not base_parseable,
         }
-    except GeneratorUnavailable:
+    except GeneratorUnavailable as exc:
         baseline_data = {
-            "text": "Local generator is not running",
+            "text": str(exc) if str(exc) else "Local generator is not running",
             "code": "",
             "diff": "",
             "latency_ms": 0.0,
@@ -343,9 +345,9 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
             "leaf": leaf_text,
         }
         tool_log.append({"tool": "propose_patch", "status": "ok"})
-    except GeneratorUnavailable:
+    except GeneratorUnavailable as exc:
         aegis_data = {
-            "text": "Local generator is not running",
+            "text": str(exc) if str(exc) else "Local generator is not running",
             "code": "",
             "diff": "",
             "latency_ms": 0.0,

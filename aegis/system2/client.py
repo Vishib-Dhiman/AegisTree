@@ -71,13 +71,25 @@ class OllamaGenerator:
             resp.raise_for_status()
             data = resp.json()
             output_text = data.get("response", "")
+        except httpx.HTTPStatusError as e:
+            try:
+                err_detail = e.response.json().get("error", "")
+            except Exception:
+                err_detail = e.response.text
+            installed = self.get_installed_models()
+            avail_str = f" Available models: {', '.join(installed)}." if installed else ""
+            if e.response.status_code == 404 or "not found" in err_detail.lower():
+                raise GeneratorUnavailable(
+                    f"Model '{self.model}' is not installed in local Ollama.{avail_str} Run 'ollama pull {self.model}' in terminal or select an installed model."
+                ) from e
+            raise GeneratorUnavailable(f"Ollama error for '{self.model}': {err_detail or e}") from e
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
             raise GeneratorUnavailable(
-                f"Local generator is not running at 127.0.0.1:11434 ({e})"
+                f"Local Ollama daemon is not running at 127.0.0.1:11434. Start it with 'ollama serve'."
             ) from e
         except Exception as e:
             raise GeneratorUnavailable(
-                f"Local generator error at 127.0.0.1:11434 ({e})"
+                f"Local generator error: {e}"
             ) from e
 
         lat_ms = (time.perf_counter() - t0) * 1000.0
@@ -88,12 +100,28 @@ class OllamaGenerator:
             backend="ollama",
         )
 
-    def is_available(self) -> bool:
+    def get_installed_models(self) -> list[str]:
         try:
             resp = self.client.get(f"{self.base_url}/api/tags", timeout=2.0)
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                data = resp.json()
+                return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
         except Exception:
+            pass
+        return []
+
+    def is_model_installed(self, model_name: Optional[str] = None) -> bool:
+        target = model_name or self.model
+        installed = self.get_installed_models()
+        if not installed:
             return False
+        return any(
+            target == inst or (":" in inst and target == inst.split(":")[0]) or (":" in target and target.split(":")[0] == inst)
+            for inst in installed
+        )
+
+    def is_available(self) -> bool:
+        return self.is_model_installed()
 
 
 class MockGenerator:
@@ -104,6 +132,12 @@ class MockGenerator:
             self.model = config.system2_model
         else:
             self.model = model or "mock-offline-fast"
+
+    def get_installed_models(self) -> list[str]:
+        return ["mock-offline-fast"]
+
+    def is_model_installed(self, model_name: Optional[str] = None) -> bool:
+        return True
 
     def is_available(self) -> bool:
         return True
