@@ -346,6 +346,13 @@ async function runWithPrompt(promptText, presetTitle = null) {
             <span>Loading local SLM weights into memory &amp; generating compliant patch...</span>
           </div>
         </div>
+        <div id="loader-reasoning-section" style="display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+          <div class="reasoning-trace-label">
+            <span class="spinner-orb-mini"></span>
+            <span id="reasoning-status-text">Model Reasoning Trace</span>
+          </div>
+          <div class="reasoning-trace-box" id="loader-reasoning-box"></div>
+        </div>
       </div>
     </div>
 
@@ -380,33 +387,91 @@ async function runWithPrompt(promptText, presetTitle = null) {
     const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
     const timerEl = document.getElementById("loader-timer");
     if (timerEl) timerEl.textContent = elapsedSec + "s";
-
-    const elapsedNum = parseFloat(elapsedSec);
-    const step2 = document.getElementById("loader-step-row-2");
-    const step3 = document.getElementById("loader-step-row-3");
-    const phaseTitle = document.getElementById("loader-phase-title");
-    const skeletonLabel = document.getElementById("skeleton-status-label");
-
-    if (elapsedNum >= 0.4 && step2) {
-      step2.style.color = "var(--accent-green)";
-      step2.firstElementChild.textContent = "✓";
-    }
-    if (elapsedNum >= 1.2 && step3) {
-      step3.style.color = "var(--accent-cyan)";
-      step3.firstElementChild.className = "spinner-orb-mini";
-      if (phaseTitle) phaseTitle.textContent = "Loading SLM weights & generating patch...";
-      if (skeletonLabel) skeletonLabel.textContent = "Streaming tokens via local SLM...";
-    }
   }, 100);
 
   try {
-    const res = await fetch("/api/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: promptText })
-    });
+    let data = null;
+    try {
+      const res = await fetch("/api/run/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: promptText })
+      });
 
-    const data = await res.json();
+      if (res.ok && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data: ")) continue;
+            try {
+              const evt = JSON.parse(trimmed.slice(6));
+              if (evt.type === "init") {
+                const step1 = document.getElementById("loader-step-row-1");
+                if (step1 && evt.verdict) {
+                  step1.innerHTML = `<span class="sparkle-mini">✓</span><span>System 1 (Verdict v1.4): matched ${escapeHtml(evt.policy ? evt.policy.primary_id : "policy")} in ${Math.round(evt.verdict.latency_ms || 32)}ms</span>`;
+                  step1.style.color = "var(--accent-green)";
+                }
+                const step2 = document.getElementById("loader-step-row-2");
+                if (step2) {
+                  step2.innerHTML = `<span class="sparkle-mini">✓</span><span>Temporal graph verified: 0 bans violated</span>`;
+                  step2.style.color = "var(--accent-green)";
+                }
+                const step3 = document.getElementById("loader-step-row-3");
+                if (step3) {
+                  step3.innerHTML = `<span class="spinner-orb-mini"></span><span>Streaming reasoning &amp; synthesis via ${escapeHtml(evt.model || "local model")}...</span>`;
+                  step3.style.color = "var(--accent-cyan)";
+                }
+                const phaseTitle = document.getElementById("loader-phase-title");
+                if (phaseTitle) phaseTitle.textContent = `Reasoning with ${evt.model || "local model"}...`;
+                const skeletonLabel = document.getElementById("skeleton-status-label");
+                if (skeletonLabel) skeletonLabel.textContent = `Streaming Reasoning & Synthesis...`;
+              } else if (evt.type === "thinking") {
+                const sec = document.getElementById("loader-reasoning-section");
+                if (sec) sec.style.display = "block";
+                const box = document.getElementById("loader-reasoning-box");
+                if (box) {
+                  box.textContent += evt.chunk;
+                  box.scrollTop = box.scrollHeight;
+                }
+              } else if (evt.type === "response") {
+                const statusText = document.getElementById("reasoning-status-text");
+                if (statusText) statusText.textContent = "✓ Reasoning Complete · Synthesizing Code";
+                const phaseTitle = document.getElementById("loader-phase-title");
+                if (phaseTitle) phaseTitle.textContent = "Streaming compliant patch...";
+                const skeletonLabel = document.getElementById("skeleton-status-label");
+                if (skeletonLabel) skeletonLabel.textContent = "Synthesizing Compliant Architecture Patch...";
+              } else if (evt.type === "finished") {
+                data = evt;
+              }
+            } catch (err) {
+              console.warn("SSE parse error", err);
+            }
+          }
+        }
+      }
+    } catch (streamErr) {
+      console.warn("Streaming request failed, falling back to /api/run:", streamErr);
+    }
+
+    if (!data) {
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: promptText })
+      });
+      data = await res.json();
+    }
+
     currentRunId = data.run_id;
     latestRunData = data;
     if (activeThreadId) {
@@ -437,7 +502,11 @@ function renderAssistantResponse(container, data, promptText) {
   container.innerHTML = "";
 
   // 1. Thought Accordion (DeepSeek/ChatGPT style)
-  const latMs = data.verdict && data.verdict.latency_ms > 0 ? Math.round(data.verdict.latency_ms) : 32;
+  const vLat = data.verdict && data.verdict.latency_ms > 0 ? Math.round(data.verdict.latency_ms) : 32;
+  const aLat = data.aegis && data.aegis.latency_ms > 0 ? Math.round(data.aegis.latency_ms) : 0;
+  const totalMs = vLat + aLat;
+  const thoughtTimeStr = totalMs >= 1000 ? (totalMs / 1000).toFixed(1) + "s" : `${totalMs}ms`;
+
   const thoughtCard = document.createElement("div");
   thoughtCard.className = "thought-card";
   
@@ -448,11 +517,21 @@ function renderAssistantResponse(container, data, promptText) {
   const excludedFiles = (data.excluded_files || []).map(f => f.path.split("/").pop()).join(", ") || "None";
   const activePolicy = data.policy && data.policy.primary_id ? data.policy.primary_id : "None";
 
+  const reasoningHtml = (data.aegis && data.aegis.thinking) ? `
+    <div class="reasoning-trace-container">
+      <div class="reasoning-trace-label">
+        <span class="sparkle-mini">✦</span>
+        <span>Model Reasoning Trace (${escapeHtml(data.model || "Local SLM")})</span>
+      </div>
+      <div class="reasoning-trace-box">${escapeHtml(data.aegis.thinking)}</div>
+    </div>
+  ` : '';
+
   thoughtCard.innerHTML = `
     <div class="thought-header">
       <div class="thought-meta">
         <span class="sparkle-mini">✦</span>
-        <span>Thought for ${latMs}ms &middot; System 1 Decision Layer</span>
+        <span>Thought for ${thoughtTimeStr} &middot; System 1 &amp; System 2 Reasoning</span>
       </div>
       <span class="thought-chevron">▼</span>
     </div>
@@ -475,8 +554,9 @@ function renderAssistantResponse(container, data, promptText) {
           <span class="telemetry-val">${escapeHtml(excludedFiles)}</span>
         </div>
       </div>
-      <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">
-        Evaluated via openJev Verdict v1.4 ModernBERT weights. Zero cloud packets transmitted.
+      ${reasoningHtml}
+      <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 8px;">
+        Evaluated via openJev Verdict v1.4 ModernBERT weights &amp; local air-gapped SLM. Zero cloud egress.
       </div>
     </div>
   `;

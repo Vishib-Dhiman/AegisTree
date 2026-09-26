@@ -3,6 +3,9 @@ Binds to 127.0.0.1:8080 strictly, enforces local execution, and provides demo AP
 """
 
 from __future__ import annotations
+import json
+import re
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -317,6 +320,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         base_diff = compute_unified_diff(old_fn_source, base_code) if base_parseable else ""
         baseline_data = {
             "text": base_gen.text,
+            "thinking": getattr(base_gen, "thinking", ""),
             "code": base_code,
             "diff": base_diff,
             "latency_ms": base_gen.latency_ms,
@@ -325,6 +329,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
     except GeneratorUnavailable as exc:
         baseline_data = {
             "text": str(exc) if str(exc) else "Local generator is not running",
+            "thinking": "",
             "code": "",
             "diff": "",
             "latency_ms": 0.0,
@@ -338,6 +343,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         aegis_diff = compute_unified_diff(old_fn_source, aegis_code) if aegis_parseable else ""
         aegis_data = {
             "text": aegis_gen.text,
+            "thinking": getattr(aegis_gen, "thinking", ""),
             "code": aegis_code,
             "diff": aegis_diff,
             "latency_ms": aegis_gen.latency_ms,
@@ -348,6 +354,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
     except GeneratorUnavailable as exc:
         aegis_data = {
             "text": str(exc) if str(exc) else "Local generator is not running",
+            "thinking": "",
             "code": "",
             "diff": "",
             "latency_ms": 0.0,
@@ -414,6 +421,285 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         "abstain_reason": None,
         "draft_adr": None,
     }
+
+
+@app.post("/api/run/stream")
+def run_prompt_stream(req: RunRequest):
+    prompt = req.prompt.strip()
+    run_id = str(uuid.uuid4())
+
+    def event_stream():
+        tool_log = []
+        search_res = search_decisions(graph, prompt)
+        tool_log.append({"tool": "search_decisions", "status": "ok"})
+
+        route = router.route(prompt, workspace_root=workspace_root)
+
+        if route.status == "blocked":
+            tool_log.append({"tool": "propose_patch", "status": "blocked"})
+            blocked_payload = {
+                "type": "finished",
+                "run_id": run_id,
+                "status": "blocked",
+                "task_type": route.task_type,
+                "task_source": route.task_source,
+                "verdict": {
+                    "loaded": route.verdict_error is None,
+                    "selected_id": route.verdict_task_id,
+                    "confidence": route.verdict_confidence or 0.0,
+                    "latency_ms": route.verdict_latency_ms or 0.0,
+                    "error": route.verdict_error,
+                },
+                "policy": {
+                    "primary_id": route.primary_policy_id,
+                    "source": route.policy_source,
+                    "confidence": route.policy_confidence,
+                    "active_ids": route.active_policy_ids,
+                },
+                "negative": [
+                    {"id": neg.id, "literals": neg.forbidden_literals}
+                    for neg in route.negative_nodes
+                ],
+                "habits": [h.model_dump() for h in route.habits],
+                "blocked_literal": route.blocked_literal,
+                "blocking_policy_id": route.blocking_policy_id,
+                "excluded_files": route.excluded_files,
+                "tokens": {"leaf": 0, "baseline": 0, "estimator": "chars/4"},
+                "baseline": None,
+                "aegis": None,
+                "tool_log": tool_log,
+                "abstain_reason": route.abstain_reason,
+                "draft_adr": None,
+            }
+            runs_cache[run_id] = {
+                "route": route,
+                "prompt": prompt,
+                "leaf_text": "",
+                "baseline_text": "",
+                "model_output": "",
+            }
+            yield f"data: {json.dumps(blocked_payload, default=str)}\n\n"
+            return
+
+        if route.status == "abstained":
+            tool_log.append({"tool": "propose_patch", "status": "skipped"})
+            abstain_payload = {
+                "type": "finished",
+                "run_id": run_id,
+                "status": "abstained",
+                "task_type": route.task_type,
+                "task_source": route.task_source,
+                "verdict": {
+                    "loaded": route.verdict_error is None,
+                    "selected_id": route.verdict_task_id,
+                    "confidence": route.verdict_confidence or 0.0,
+                    "latency_ms": route.verdict_latency_ms or 0.0,
+                    "error": route.verdict_error,
+                },
+                "policy": {
+                    "primary_id": None,
+                    "source": "none",
+                    "confidence": None,
+                    "active_ids": [],
+                },
+                "negative": [],
+                "habits": [h.model_dump() for h in route.habits],
+                "excluded_files": route.excluded_files,
+                "tokens": {"leaf": 0, "baseline": 0, "estimator": "chars/4"},
+                "baseline": None,
+                "aegis": None,
+                "tool_log": tool_log,
+                "abstain_reason": route.abstain_reason,
+                "draft_adr": None,
+            }
+            runs_cache[run_id] = {
+                "route": route,
+                "prompt": prompt,
+                "leaf_text": "",
+                "baseline_text": "",
+                "model_output": "",
+            }
+            yield f"data: {json.dumps(abstain_payload, default=str)}\n\n"
+            return
+
+        if route.task_type == "write_adr":
+            tool_log.append({"tool": "propose_patch", "status": "skipped"})
+            write_adr_payload = {
+                "type": "finished",
+                "run_id": run_id,
+                "status": "ready",
+                "task_type": route.task_type,
+                "task_source": route.task_source,
+                "verdict": {
+                    "loaded": route.verdict_error is None,
+                    "selected_id": route.verdict_task_id,
+                    "confidence": route.verdict_confidence or 0.0,
+                    "latency_ms": route.verdict_latency_ms or 0.0,
+                    "error": route.verdict_error,
+                },
+                "policy": {
+                    "primary_id": route.primary_policy_id,
+                    "source": route.policy_source,
+                    "confidence": route.policy_confidence,
+                    "active_ids": route.active_policy_ids,
+                },
+                "negative": [
+                    {"id": neg.id, "literals": neg.forbidden_literals}
+                    for neg in route.negative_nodes
+                ],
+                "habits": [h.model_dump() for h in route.habits],
+                "excluded_files": route.excluded_files,
+                "tokens": {"leaf": 0, "baseline": 0, "estimator": "chars/4"},
+                "baseline": None,
+                "aegis": None,
+                "tool_log": tool_log,
+                "abstain_reason": None,
+                "draft_adr": route.draft_adr,
+            }
+            yield f"data: {json.dumps(write_adr_payload, default=str)}\n\n"
+            return
+
+        leaf_text = compile_leaf(route, graph, prompt, workspace_root=workspace_root)
+        baseline_text = compile_baseline(prompt, workspace_root=workspace_root)
+
+        leaf_tokens = estimate_tokens(leaf_text)
+        baseline_tokens = estimate_tokens(baseline_text)
+
+        target_file, fn_name = select_target(prompt, workspace_root)
+        if not target_file.exists():
+            target_file = workspace_root / "vault" / "store.py"
+            fn_name = "persist_session_token"
+        try:
+            old_fn_source = extract_function_source(target_file, fn_name)
+        except Exception:
+            old_fn_source = ""
+
+        target_rel = "vault/store.py"
+        try:
+            if target_file.is_relative_to(workspace_root):
+                target_rel = str(target_file.relative_to(workspace_root))
+            else:
+                target_rel = target_file.name
+        except Exception:
+            target_rel = target_file.name
+
+        negative_formatted = [
+            {"id": neg.id, "literals": neg.forbidden_literals}
+            for neg in route.negative_nodes
+        ]
+
+        init_payload = {
+            "type": "init",
+            "run_id": run_id,
+            "status": "ready",
+            "task_type": route.task_type,
+            "task_source": route.task_source,
+            "model": config_manager.config.system2_model,
+            "verdict": {
+                "loaded": route.verdict_error is None,
+                "selected_id": route.verdict_task_id,
+                "confidence": route.verdict_confidence or 0.0,
+                "latency_ms": route.verdict_latency_ms or 0.0,
+                "error": route.verdict_error,
+            },
+            "policy": {
+                "primary_id": route.primary_policy_id,
+                "source": route.policy_source,
+                "confidence": route.policy_confidence,
+                "active_ids": route.active_policy_ids,
+            },
+            "negative": negative_formatted,
+            "habits": [h.model_dump() for h in route.habits],
+            "excluded_files": route.excluded_files,
+            "tokens": {
+                "leaf": leaf_tokens,
+                "baseline": baseline_tokens,
+                "estimator": "chars/4",
+            },
+            "target_file": target_rel,
+        }
+        yield f"data: {json.dumps(init_payload, default=str)}\n\n"
+
+        accumulated_text = ""
+        accumulated_thinking = ""
+        t0 = time.perf_counter()
+        try:
+            for chunk in generator.complete_stream(leaf_text):
+                thinking_chunk = chunk.get("thinking", "")
+                response_chunk = chunk.get("response", "")
+                if thinking_chunk:
+                    accumulated_thinking += thinking_chunk
+                    yield f"data: {json.dumps({'type': 'thinking', 'chunk': thinking_chunk})}\n\n"
+                if response_chunk:
+                    accumulated_text += response_chunk
+                    yield f"data: {json.dumps({'type': 'response', 'chunk': response_chunk})}\n\n"
+            tool_log.append({"tool": "propose_patch", "status": "ok"})
+        except Exception as e:
+            accumulated_text = f"Local generator error: {e}"
+            tool_log.append({"tool": "propose_patch", "status": "error"})
+
+        lat_ms = (time.perf_counter() - t0) * 1000.0
+
+        if not accumulated_thinking and "<think>" in accumulated_text and "</think>" in accumulated_text:
+            m = re.search(r"<think>(.*?)</think>", accumulated_text, re.DOTALL)
+            if m:
+                accumulated_thinking = m.group(1).strip()
+                accumulated_text = re.sub(r"<think>.*?</think>", "", accumulated_text, flags=re.DOTALL).strip()
+
+        aegis_code = extract_code(accumulated_text)
+        aegis_parseable = is_code_parseable(aegis_code, fn_name)
+        aegis_diff = compute_unified_diff(old_fn_source, aegis_code) if aegis_parseable else ""
+        aegis_data = {
+            "text": accumulated_text,
+            "thinking": accumulated_thinking,
+            "code": aegis_code,
+            "diff": aegis_diff,
+            "latency_ms": lat_ms,
+            "unparseable": not aegis_parseable,
+            "leaf": leaf_text,
+        }
+
+        baseline_data = {
+            "text": "",
+            "thinking": "",
+            "code": "",
+            "diff": "",
+            "latency_ms": 0.0,
+            "unparseable": False,
+        }
+
+        runs_cache[run_id] = {
+            "route": route,
+            "prompt": prompt,
+            "leaf_text": leaf_text,
+            "baseline_text": baseline_text,
+            "model_output": aegis_data["text"],
+            "aegis_code": aegis_data["code"],
+        }
+
+        full_payload = {
+            "type": "finished",
+            "run_id": run_id,
+            "status": "ready",
+            "task_type": route.task_type,
+            "task_source": route.task_source,
+            "verdict": init_payload["verdict"],
+            "policy": init_payload["policy"],
+            "negative": negative_formatted,
+            "habits": init_payload["habits"],
+            "excluded_files": init_payload["excluded_files"],
+            "tokens": init_payload["tokens"],
+            "target_file": target_rel,
+            "baseline": baseline_data,
+            "aegis": aegis_data,
+            "tool_log": tool_log,
+            "abstain_reason": None,
+            "draft_adr": None,
+        }
+        yield f"data: {json.dumps(full_payload, default=str)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
 
 
 @app.post("/api/approve")

@@ -15,6 +15,7 @@ from aegis.core.config import SystemConfig
 
 class Generation(BaseModel):
     text: str
+    thinking: str = ""
     latency_ms: float
     model: str
     backend: Literal["ollama", "mock"]
@@ -27,6 +28,9 @@ class GeneratorUnavailable(Exception):
 
 class Generator(Protocol):
     def complete(self, prompt: str) -> Generation:
+        ...
+
+    def complete_stream(self, prompt: str):
         ...
 
 
@@ -71,6 +75,12 @@ class OllamaGenerator:
             resp.raise_for_status()
             data = resp.json()
             output_text = data.get("response", "")
+            thinking_text = data.get("thinking", "")
+            if not thinking_text and "<think>" in output_text and "</think>" in output_text:
+                m = re.search(r"<think>(.*?)</think>", output_text, re.DOTALL)
+                if m:
+                    thinking_text = m.group(1).strip()
+                    output_text = re.sub(r"<think>.*?</think>", "", output_text, flags=re.DOTALL).strip()
         except httpx.HTTPStatusError as e:
             try:
                 err_detail = e.response.json().get("error", "")
@@ -95,10 +105,53 @@ class OllamaGenerator:
         lat_ms = (time.perf_counter() - t0) * 1000.0
         return Generation(
             text=output_text,
+            thinking=thinking_text,
             latency_ms=lat_ms,
             model=self.model,
             backend="ollama",
         )
+
+    def complete_stream(self, prompt: str):
+        url = f"{self.base_url}/api/generate"
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {"temperature": self.temperature},
+        }
+        try:
+            with self.client.stream("POST", url, json=payload, timeout=self.timeout) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        import json
+                        chunk = json.loads(line)
+                        yield chunk
+                    except Exception:
+                        continue
+        except httpx.HTTPStatusError as e:
+            try:
+                err_detail = e.response.json().get("error", "")
+            except Exception:
+                err_detail = e.response.text
+            installed = self.get_installed_models()
+            avail_str = f" Available models: {', '.join(installed)}." if installed else ""
+            if e.response.status_code == 404 or "not found" in err_detail.lower():
+                raise GeneratorUnavailable(
+                    f"Model '{self.model}' is not installed in local Ollama.{avail_str} Run 'ollama pull {self.model}' in terminal or select an installed model."
+                ) from e
+            raise GeneratorUnavailable(f"Ollama error for '{self.model}': {err_detail or e}") from e
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
+            raise GeneratorUnavailable(
+                f"Local Ollama daemon is not running at 127.0.0.1:11434. Start it with 'ollama serve'."
+            ) from e
+        except Exception as e:
+            raise GeneratorUnavailable(
+                f"Local generator error: {e}"
+            ) from e
 
     def get_installed_models(self) -> list[str]:
         try:
@@ -150,7 +203,7 @@ class MockGenerator:
             m_retries = re.search(r"must set retries=(\d+)", prompt) or re.search(r"retries=(\d+)", prompt)
             retries = int(m_retries.group(1)) if m_retries else 3
             m_timeout = re.search(r"must set timeout_s=([0-9.]+)", prompt) or re.search(r"timeout_s=([0-9.]+)", prompt)
-            timeout_s = float(m_timeout.group(1)) if m_timeout else 5.0
+            timeout_s = float(m_timeout.group(1).rstrip(".")) if m_timeout else 5.0
 
             if "rotate" in p_low:
                 fn_name = "rotate_session_token"
@@ -201,9 +254,25 @@ class MockGenerator:
             )
 
         lat_ms = (time.perf_counter() - t0) * 1000.0
+        thinking = "Analyzing leaf prompt constraints and active ADRs...\nConfirmed in-force policy ADR-014 (aegis_seal).\nEnsured deprecated methods (legacy_wrap) are excluded."
         return Generation(
             text=code,
+            thinking=thinking,
             latency_ms=lat_ms,
             model=self.model,
             backend="mock",
         )
+
+    def complete_stream(self, prompt: str):
+        gen = self.complete(prompt)
+        yield {
+            "thinking": gen.thinking + "\n",
+            "response": "",
+            "done": False,
+        }
+        yield {
+            "thinking": "",
+            "response": gen.text,
+            "done": True,
+        }
+
