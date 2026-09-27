@@ -294,9 +294,9 @@
 
           <div class="input-toolbar-bottom">
             <div class="toolbar-left">
-              <button class="input-action-btn" id="btn-attach" title="Workspace Scope">
+              <button class="input-action-btn" id="btn-attach" title="Change Repository Scope">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-                <span>demo_vault</span>
+                <span id="workspace-label">demo_vault</span>
               </button>
               <div class="toolbar-pill">
                 <span class="sparkle-mini">✦</span>
@@ -438,8 +438,39 @@
       </div>
     </div>
 
+    <!-- Workspace / Repository Selector Modal -->
+    <div id="workspace-modal-backdrop" class="modal-backdrop" style="display: none;">
+      <div class="adr-modal-dialog" style="max-width: 520px;">
+        <div class="adr-modal-header">
+          <div class="adr-modal-title-area">
+            <span class="status-badge blue">Scope</span>
+            <h3 class="adr-modal-title">Active Repository Scope</h3>
+          </div>
+          <button id="btn-workspace-close" class="icon-btn-ghost">&times;</button>
+        </div>
+        <div class="adr-modal-body" style="padding: 20px 24px;">
+          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+            Select or enter the local repository path to govern with AegisTree. System 1 will ingest its ADRs and context notes.
+          </p>
+          <div class="adr-field-group">
+            <label class="adr-field-label">Repository Directory Path</label>
+            <input id="workspace-path-input" class="adr-text-input" placeholder="/path/to/your/repository or demo_vault" spellcheck="false" />
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+            <button type="button" class="btn-xs-secondary" id="btn-quick-demo-vault">demo_vault</button>
+            <button type="button" class="btn-xs-secondary" id="btn-quick-current-dir">Current Root (.)</button>
+          </div>
+          <div id="workspace-status-info" style="margin-top: 14px; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);"></div>
+        </div>
+        <div class="adr-edit-footer" style="padding: 14px 24px;">
+          <button id="btn-workspace-cancel" class="btn-xs-secondary">Cancel</button>
+          <button id="btn-workspace-switch" class="btn-xs-primary">Switch Repository</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <script src="app.js?v=2.6"></script>
+  <script src="app.js?v=2.7"></script>
 </body>
 </html>

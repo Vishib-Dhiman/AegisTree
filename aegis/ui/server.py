@@ -824,17 +824,62 @@ class UpdateAdrRequest(BaseModel):
 
 
 def _reload_workspace_memory():
-    global graph, router
+    global graph, router, workspace_root
     # Preserve learned habits
     habits = [n for n in graph.all_nodes() if n.type == NodeType.HABIT]
     nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
-    note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes")
+    note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes") if (workspace_root / "notes").exists() else []
     graph.replace_corpus(nodes, edges)
     for h in habits:
         graph.upsert_node(h)
     for n in note_nodes:
         graph.upsert_node(n)
     router = Router(graph=graph, config=config)
+
+
+class SwitchWorkspaceRequest(BaseModel):
+    path: str
+
+
+@app.get("/api/workspace")
+def get_workspace() -> Dict[str, Any]:
+    global workspace_root
+    adr_count = len(list((workspace_root / "docs" / "adr").glob("*.md"))) if (workspace_root / "docs" / "adr").exists() else 0
+    note_count = len(list((workspace_root / "notes").glob("*.md"))) if (workspace_root / "notes").exists() else 0
+    return {
+        "workspace_root": str(workspace_root.resolve()),
+        "name": workspace_root.name,
+        "exists": workspace_root.exists(),
+        "adr_count": adr_count,
+        "note_count": note_count,
+    }
+
+
+@app.post("/api/workspace")
+def switch_workspace(req: SwitchWorkspaceRequest) -> Dict[str, Any]:
+    global workspace_root
+    target_path = Path(req.path.strip()).expanduser()
+    if not target_path.is_absolute():
+        target_path = (Path.cwd() / target_path).resolve()
+
+    if not target_path.exists():
+        raise HTTPException(status_code=400, detail=f"Directory '{target_path}' does not exist on disk.")
+    if not target_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path '{target_path}' is not a directory.")
+
+    workspace_root = target_path
+    _reload_workspace_memory()
+
+    adr_count = len(list((workspace_root / "docs" / "adr").glob("*.md"))) if (workspace_root / "docs" / "adr").exists() else 0
+    note_count = len(list((workspace_root / "notes").glob("*.md"))) if (workspace_root / "notes").exists() else 0
+
+    return {
+        "status": "switched",
+        "workspace_root": str(workspace_root),
+        "name": workspace_root.name,
+        "adr_count": adr_count,
+        "note_count": note_count,
+    }
 
 
 @app.get("/api/adrs")

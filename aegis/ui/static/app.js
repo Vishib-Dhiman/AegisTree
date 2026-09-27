@@ -37,6 +37,7 @@ const PRESET_TITLES = {
 document.addEventListener("DOMContentLoaded", () => {
   initHealth();
   initModelSelector();
+  initWorkspace();
   initMemory();
   initAdrModal();
   initThreads();
@@ -237,6 +238,110 @@ async function initModelSelector() {
   } catch (e) {
     console.error("Model selector error:", e);
   }
+}
+
+async function initWorkspace() {
+  const btnAttach = document.getElementById("btn-attach");
+  const labelEl = document.getElementById("workspace-label");
+  const backdrop = document.getElementById("workspace-modal-backdrop");
+  const btnClose = document.getElementById("btn-workspace-close");
+  const btnCancel = document.getElementById("btn-workspace-cancel");
+  const btnSwitch = document.getElementById("btn-workspace-switch");
+  const pathInput = document.getElementById("workspace-path-input");
+  const statusInfo = document.getElementById("workspace-status-info");
+  const btnQuickDemo = document.getElementById("btn-quick-demo-vault");
+  const btnQuickCur = document.getElementById("btn-quick-current-dir");
+
+  async function fetchCurrentWorkspace() {
+    try {
+      const res = await fetch("/api/workspace");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (labelEl) labelEl.textContent = data.name || "workspace";
+      if (pathInput) pathInput.value = data.workspace_root || "demo_vault";
+      if (statusInfo) {
+        statusInfo.textContent = `Active: ${data.workspace_root} (${data.adr_count} ADRs, ${data.note_count} Notes)`;
+      }
+    } catch (e) {
+      console.warn("Failed to load workspace info:", e);
+    }
+  }
+
+  function openWorkspaceModal() {
+    if (backdrop) {
+      backdrop.style.display = "flex";
+      fetchCurrentWorkspace();
+      setTimeout(() => pathInput && pathInput.focus(), 50);
+    }
+  }
+
+  function closeWorkspaceModal() {
+    if (backdrop) backdrop.style.display = "none";
+  }
+
+  if (btnAttach) {
+    btnAttach.addEventListener("click", openWorkspaceModal);
+  }
+
+  if (btnClose) btnClose.addEventListener("click", closeWorkspaceModal);
+  if (btnCancel) btnCancel.addEventListener("click", closeWorkspaceModal);
+  if (backdrop) {
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeWorkspaceModal();
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && backdrop && backdrop.style.display !== "none") {
+      closeWorkspaceModal();
+    }
+  });
+
+  if (btnQuickDemo && pathInput) {
+    btnQuickDemo.addEventListener("click", () => {
+      pathInput.value = "demo_vault";
+    });
+  }
+  if (btnQuickCur && pathInput) {
+    btnQuickCur.addEventListener("click", () => {
+      pathInput.value = ".";
+    });
+  }
+
+  if (btnSwitch) {
+    btnSwitch.addEventListener("click", async () => {
+      const targetPath = (pathInput ? pathInput.value : "").trim();
+      if (!targetPath) {
+        alert("Please enter a valid directory path.");
+        return;
+      }
+      btnSwitch.disabled = true;
+      btnSwitch.textContent = "Switching...";
+
+      try {
+        const res = await fetch("/api/workspace", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: targetPath })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Failed to switch workspace");
+        }
+        const data = await res.json();
+        if (labelEl) labelEl.textContent = data.name;
+        closeWorkspaceModal();
+        await initMemory();
+      } catch (err) {
+        alert("Cannot switch workspace: " + err.message);
+      } finally {
+        btnSwitch.disabled = false;
+        btnSwitch.textContent = "Switch Repository";
+      }
+    });
+  }
+
+  await fetchCurrentWorkspace();
 }
 
 let currentModalAdrId = null;
