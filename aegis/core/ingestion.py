@@ -91,6 +91,15 @@ class ADRParser:
         decision_text = cls._extract_section_text(content, "Decision")
         description = decision_text[:400] if decision_text else content[:400].strip()
 
+        # Why Inactive / Superseded Rationale
+        why_inactive = (
+            cls._extract_section_text(content, "Why Inactive")
+            or cls._extract_section_text(content, "Superseded Rationale")
+            or cls._extract_section_text(content, "Deprecation Reason")
+            or cls._extract_section_text(content, "Decommission Rationale")
+            or cls._extract_section_text(content, "Rationale")
+        )
+
         node_id = f"adr:{filepath.stem}"
         node = GraphNode(
             id=node_id,
@@ -106,6 +115,7 @@ class ADRParser:
                 "source_file": str(filepath),
                 "raw_status": raw_status,
                 "parsed_date": valid_from.isoformat(),
+                "why_inactive": why_inactive,
             },
         )
 
@@ -160,6 +170,8 @@ def apply_supersession(nodes: List[GraphNode], edges: List[BiTemporalEdge]) -> N
                     for lit in target_node.required_literals:
                         if lit not in target_node.forbidden_literals:
                             target_node.forbidden_literals.append(lit)
+                    if not target_node.metadata.get("why_inactive"):
+                        target_node.metadata["why_inactive"] = f"Superseded by {source_node.label} ({source_node.id}). Its implementation patterns are forbidden in production."
                 edge.deprecated_at = None
             else:
                 edge.metadata["unresolved_target"] = True

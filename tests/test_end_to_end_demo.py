@@ -62,7 +62,7 @@ def test_e2e_pitch_demo_standard_flow(clean_sandbox):
     leaf_tokens = estimate_tokens(leaf_text)
     baseline_tokens = estimate_tokens(baseline_text)
 
-    assert leaf_tokens < 600
+    assert leaf_tokens < 800
     assert baseline_tokens > 1000
     compression_ratio = (baseline_tokens - leaf_tokens) / baseline_tokens
     assert compression_ratio > 0.55

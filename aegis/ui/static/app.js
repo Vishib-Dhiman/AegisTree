@@ -791,6 +791,17 @@ async function openAdrModal(adrId, isCreate = false) {
     document.getElementById("adr-view-tags").textContent = (data.tags && data.tags.length > 0) ? data.tags.join(", ") : "None";
     document.getElementById("adr-view-decision").textContent = data.description || "No decision statement found.";
 
+    const supersededBox = document.getElementById("adr-view-superseded-box");
+    const supersededReasonEl = document.getElementById("adr-view-superseded-reason");
+    if (data.epistemic_status === "superseded" || data.why_inactive) {
+      if (supersededBox) supersededBox.style.display = "block";
+      if (supersededReasonEl) {
+        supersededReasonEl.textContent = data.why_inactive || "This decision has been superseded by a newer architectural standard. Its patterns are strictly forbidden in production code.";
+      }
+    } else {
+      if (supersededBox) supersededBox.style.display = "none";
+    }
+
     const reqContainer = document.getElementById("adr-view-required");
     reqContainer.innerHTML = "";
     if (data.required && data.required.length > 0) {

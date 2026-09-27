@@ -55,30 +55,9 @@ def write(
 
 
 REAL_REPOS_ADRS = {
-    "sqlalchemy": {
-        "docs/adr/010-legacy-engine-execute.md": ALL_REPOS["demo_sqlalchemy"]["docs/adr/010-legacy-engine-execute.md"],
-        "docs/adr/045-sqlalchemy-20.md": ALL_REPOS["demo_sqlalchemy"]["docs/adr/045-sqlalchemy-20.md"],
-        "notes/db_standards.md": ALL_REPOS["demo_sqlalchemy"]["notes/db_standards.md"],
-        "vault/__init__.py": "",
-        "vault/db.py": ALL_REPOS["demo_sqlalchemy"]["vault/db.py"],
-        "vault/legacy_db.py": ALL_REPOS["demo_sqlalchemy"]["vault/legacy_db.py"],
-    },
-    "cryptography": {
-        "docs/adr/005-rsa-pkcs1v15.md": ALL_REPOS["demo_pyca"]["docs/adr/005-rsa-pkcs1v15.md"],
-        "docs/adr/021-rsa-oaep.md": ALL_REPOS["demo_pyca"]["docs/adr/021-rsa-oaep.md"],
-        "notes/crypto_policy.md": ALL_REPOS["demo_pyca"]["notes/crypto_policy.md"],
-        "vault/__init__.py": "",
-        "vault/crypto.py": ALL_REPOS["demo_pyca"]["vault/crypto.py"],
-        "vault/legacy_crypto.py": ALL_REPOS["demo_pyca"]["vault/legacy_crypto.py"],
-    },
-    "pydantic": {
-        "docs/adr/008-pydantic-v1.md": ALL_REPOS["demo_pydantic"]["docs/adr/008-pydantic-v1.md"],
-        "docs/adr/032-pydantic-v2.md": ALL_REPOS["demo_pydantic"]["docs/adr/032-pydantic-v2.md"],
-        "notes/pydantic_migration.md": ALL_REPOS["demo_pydantic"]["notes/pydantic_migration.md"],
-        "vault/__init__.py": "",
-        "vault/schemas.py": ALL_REPOS["demo_pydantic"]["vault/schemas.py"],
-        "vault/legacy_schemas.py": ALL_REPOS["demo_pydantic"]["vault/legacy_schemas.py"],
-    },
+    "sqlalchemy": ALL_REPOS["demo_sqlalchemy"],
+    "cryptography": ALL_REPOS["demo_pyca"],
+    "pydantic": ALL_REPOS["demo_pydantic"],
 }
 
 

@@ -779,7 +779,13 @@ def get_memory() -> Dict[str, Any]:
     ]
 
     superseded = [
-        {"id": n.id, "label": n.label, "type": n.type.value, "superseded_at": n.superseded_at.isoformat() if n.superseded_at else None}
+        {
+            "id": n.id,
+            "label": n.label,
+            "type": n.type.value,
+            "superseded_at": n.superseded_at.isoformat() if n.superseded_at else None,
+            "why_inactive": n.metadata.get("why_inactive", ""),
+        }
         for n in all_nodes
         if n.epistemic_status == EpistemicStatus.SUPERSEDED
     ]
@@ -871,7 +877,7 @@ def list_workspaces() -> Dict[str, Any]:
             "title": "Northwind Session Vault",
             "domain": "Token Storage",
             "icon": "🔐",
-            "adrs": ["ADR-014", "ADR-003"],
+            "adrs": ["ADR-014", "ADR-018", "ADR-025", "ADR-003 (Superseded)", "ADR-001", "ADR-007"],
             "desc": "Local demo vault: Session token persistence, aegis_seal policy, legacy_wrap closure",
         },
         {
@@ -882,7 +888,7 @@ def list_workspaces() -> Dict[str, Any]:
             "title": "pyca/cryptography (GitHub)",
             "domain": "Public-Key Crypto",
             "icon": "🔑",
-            "adrs": ["ADR-021", "ADR-005"],
+            "adrs": ["ADR-021", "ADR-015", "ADR-027", "ADR-035", "ADR-005 (Superseded)", "ADR-002", "ADR-009"],
             "desc": "Real GitHub repo (pyca/cryptography): RSA payload encryption, OAEP SHA-256 vs PKCS1v15 padding",
         },
         {
@@ -893,7 +899,7 @@ def list_workspaces() -> Dict[str, Any]:
             "title": "pydantic/pydantic (GitHub)",
             "domain": "Data Serialization",
             "icon": "📦",
-            "adrs": ["ADR-032", "ADR-008"],
+            "adrs": ["ADR-032", "ADR-029", "ADR-036", "ADR-041", "ADR-008 (Superseded)", "ADR-004", "ADR-012"],
             "desc": "Real GitHub repo (pydantic/pydantic): Schema serialization, Pydantic v2 model_dump() vs .dict()",
         },
         {
@@ -904,7 +910,7 @@ def list_workspaces() -> Dict[str, Any]:
             "title": "sqlalchemy/sqlalchemy (GitHub)",
             "domain": "Database Engine",
             "icon": "🗄️",
-            "adrs": ["ADR-045", "ADR-010"],
+            "adrs": ["ADR-045", "ADR-022", "ADR-048", "ADR-052", "ADR-010 (Superseded)", "ADR-006", "ADR-016"],
             "desc": "Real GitHub repo (sqlalchemy/sqlalchemy): Audit trail queries, session.execute(select(...)) vs engine.execute()",
         },
     ]
@@ -978,6 +984,7 @@ def list_adrs() -> Dict[str, Any]:
                 "required": node.required_literals,
                 "forbidden": node.forbidden_literals,
                 "description": node.description,
+                "why_inactive": node.metadata.get("why_inactive", ""),
                 "content": content,
             })
         else:
@@ -992,6 +999,7 @@ def list_adrs() -> Dict[str, Any]:
                 "required": [],
                 "forbidden": [],
                 "description": "",
+                "why_inactive": "",
                 "content": content,
             })
     return {"adrs": adrs}
@@ -1025,6 +1033,7 @@ def get_adr(adr_id: str) -> Dict[str, Any]:
         "required": node.required_literals if node else [],
         "forbidden": node.forbidden_literals if node else [],
         "description": node.description if node else "",
+        "why_inactive": node.metadata.get("why_inactive", "") if node else "",
         "content": content,
     }
 
