@@ -75,10 +75,29 @@ function initEventListeners() {
   });
 
   // Action chips & recent scenarios
+  const SCENARIO_REPO_MAP = {
+    persist: "demo_vault",
+    rotate: "demo_vault",
+    pyca_oaep: "demo_pyca",
+    pyca_pkcs1: "demo_pyca",
+    pydantic_v2: "demo_pydantic",
+    pydantic_v1: "demo_pydantic",
+    db_sqlalchemy: "demo_sqlalchemy",
+    db_engine: "demo_sqlalchemy",
+  };
+
   document.querySelectorAll("[data-prompt]").forEach(elem => {
-    elem.addEventListener("click", () => {
+    elem.addEventListener("click", async () => {
       const key = elem.getAttribute("data-prompt");
       if (PROMPTS[key]) {
+        const targetRepo = SCENARIO_REPO_MAP[key];
+        if (targetRepo && targetRepo !== currentWorkspaceName) {
+          try {
+            await switchToWorkspace(targetRepo);
+          } catch (e) {
+            console.warn("Auto repo switch warning:", e);
+          }
+        }
         activeThreadId = null;
         renderThreadsList();
         document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
@@ -240,6 +259,37 @@ async function initModelSelector() {
   }
 }
 
+let currentWorkspaceName = "demo_vault";
+
+async function switchToWorkspace(targetPath) {
+  try {
+    const res = await fetch("/api/workspace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: targetPath })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to switch workspace");
+    }
+    const data = await res.json();
+    currentWorkspaceName = data.name;
+    const labelEl = document.getElementById("workspace-label");
+    if (labelEl) labelEl.textContent = data.name;
+    const pathInput = document.getElementById("workspace-path-input");
+    if (pathInput) pathInput.value = data.workspace_root;
+    const statusInfo = document.getElementById("workspace-status-info");
+    if (statusInfo) {
+      statusInfo.textContent = `Active: ${data.workspace_root} (${data.adr_count} ADRs, ${data.note_count} Notes)`;
+    }
+    await initMemory();
+    return data;
+  } catch (err) {
+    console.error("Workspace switch error:", err);
+    throw err;
+  }
+}
+
 async function initWorkspace() {
   const btnAttach = document.getElementById("btn-attach");
   const labelEl = document.getElementById("workspace-label");
@@ -249,18 +299,50 @@ async function initWorkspace() {
   const btnSwitch = document.getElementById("btn-workspace-switch");
   const pathInput = document.getElementById("workspace-path-input");
   const statusInfo = document.getElementById("workspace-status-info");
-  const btnQuickDemo = document.getElementById("btn-quick-demo-vault");
-  const btnQuickCur = document.getElementById("btn-quick-current-dir");
+  const presetsContainer = document.getElementById("workspace-presets-container");
 
   async function fetchCurrentWorkspace() {
     try {
-      const res = await fetch("/api/workspace");
+      const res = await fetch("/api/workspaces");
       if (!res.ok) return;
       const data = await res.json();
-      if (labelEl) labelEl.textContent = data.name || "workspace";
-      if (pathInput) pathInput.value = data.workspace_root || "demo_vault";
+      currentWorkspaceName = data.active;
+      if (labelEl) labelEl.textContent = data.active || "workspace";
+      if (pathInput) pathInput.value = data.active_path || "demo_vault";
       if (statusInfo) {
-        statusInfo.textContent = `Active: ${data.workspace_root} (${data.adr_count} ADRs, ${data.note_count} Notes)`;
+        statusInfo.textContent = `Active: ${data.active_path}`;
+      }
+
+      if (presetsContainer && data.presets) {
+        presetsContainer.innerHTML = "";
+        data.presets.forEach(p => {
+          const card = document.createElement("div");
+          const isActive = p.name === data.active;
+          card.className = "workspace-card" + (isActive ? " active" : "");
+          card.innerHTML = `
+            <div class="workspace-card-header">
+              <span class="workspace-card-title">${p.icon} ${escapeHtml(p.name)}</span>
+              <span class="workspace-card-badge">${isActive ? "● Active" : escapeHtml(p.domain)}</span>
+            </div>
+            <div class="workspace-card-desc">${escapeHtml(p.desc)}</div>
+            <div class="workspace-card-meta">
+              <span class="workspace-card-adrs">${p.adrs.join(" &middot; ")}</span>
+            </div>
+          `;
+          card.addEventListener("click", async () => {
+            if (isActive) {
+              closeWorkspaceModal();
+              return;
+            }
+            try {
+              await switchToWorkspace(p.id);
+              closeWorkspaceModal();
+            } catch (err) {
+              alert("Failed to switch: " + err.message);
+            }
+          });
+          presetsContainer.appendChild(card);
+        });
       }
     } catch (e) {
       console.warn("Failed to load workspace info:", e);
@@ -279,10 +361,7 @@ async function initWorkspace() {
     if (backdrop) backdrop.style.display = "none";
   }
 
-  if (btnAttach) {
-    btnAttach.addEventListener("click", openWorkspaceModal);
-  }
-
+  if (btnAttach) btnAttach.addEventListener("click", openWorkspaceModal);
   if (btnClose) btnClose.addEventListener("click", closeWorkspaceModal);
   if (btnCancel) btnCancel.addEventListener("click", closeWorkspaceModal);
   if (backdrop) {
@@ -297,17 +376,6 @@ async function initWorkspace() {
     }
   });
 
-  if (btnQuickDemo && pathInput) {
-    btnQuickDemo.addEventListener("click", () => {
-      pathInput.value = "demo_vault";
-    });
-  }
-  if (btnQuickCur && pathInput) {
-    btnQuickCur.addEventListener("click", () => {
-      pathInput.value = ".";
-    });
-  }
-
   if (btnSwitch) {
     btnSwitch.addEventListener("click", async () => {
       const targetPath = (pathInput ? pathInput.value : "").trim();
@@ -319,24 +387,13 @@ async function initWorkspace() {
       btnSwitch.textContent = "Switching...";
 
       try {
-        const res = await fetch("/api/workspace", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: targetPath })
-        });
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || "Failed to switch workspace");
-        }
-        const data = await res.json();
-        if (labelEl) labelEl.textContent = data.name;
+        await switchToWorkspace(targetPath);
         closeWorkspaceModal();
-        await initMemory();
       } catch (err) {
         alert("Cannot switch workspace: " + err.message);
       } finally {
         btnSwitch.disabled = false;
-        btnSwitch.textContent = "Switch Repository";
+        btnSwitch.textContent = "Switch";
       }
     });
   }

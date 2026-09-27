@@ -311,33 +311,102 @@ TEST_LEGACY_DB_PY = '''def test_legacy_db_covers_etl():
     assert True
 '''
 
+# 1. Northwind Session Vault (demo_vault)
 VAULT_FILES = {
     "README.md": README_MD,
     "docs/adr/003-legacy-wrap.md": ADR_003_MD,
     "docs/adr/014-aegis-seal.md": ADR_014_MD,
-    "docs/adr/005-rsa-pkcs1v15.md": ADR_005_MD,
-    "docs/adr/021-rsa-oaep.md": ADR_021_MD,
-    "docs/adr/008-pydantic-v1.md": ADR_008_MD,
-    "docs/adr/032-pydantic-v2.md": ADR_032_MD,
-    "docs/adr/010-legacy-engine-execute.md": ADR_010_MD,
-    "docs/adr/045-sqlalchemy-20.md": ADR_045_MD,
     "notes/owners.md": OWNERS_MD,
     "vault/__init__.py": INIT_PY,
     "vault/seal.py": SEAL_PY,
+    "vault/store.py": STORE_PY,
     "vault/legacy_session.py": LEGACY_SESSION_PY,
     "vault/legacy_export.py": LEGACY_EXPORT_PY,
     "vault/legacy_backup.py": LEGACY_BACKUP_PY,
     "vault/legacy_admin.py": LEGACY_ADMIN_PY,
-    "vault/store.py": STORE_PY,
+    "tests/test_legacy_wrap.py": TEST_LEGACY_WRAP_PY,
+}
+
+# 2. PyCA Cryptography Microservice (demo_pyca)
+PYCA_README = """# Northwind PyCA Cryptography Vault
+
+Microservice handling asymmetric cryptographic payload encryption.
+The current standard enforces RSA-OAEP with SHA-256 (ADR-021).
+Legacy PKCS1v15 padding (ADR-005) is forbidden in production.
+"""
+
+PYCA_NOTE_MD = """# Cryptographic Policy & Standards
+
+All asymmetric payload encryption must use RSA-OAEP with SHA-256.
+PKCS1v15 padding is prohibited across all production endpoints due to padding oracle vulnerabilities.
+"""
+
+PYCA_FILES = {
+    "README.md": PYCA_README,
+    "docs/adr/005-rsa-pkcs1v15.md": ADR_005_MD,
+    "docs/adr/021-rsa-oaep.md": ADR_021_MD,
+    "notes/crypto_policy.md": PYCA_NOTE_MD,
+    "vault/__init__.py": INIT_PY,
     "vault/crypto.py": CRYPTO_PY,
     "vault/legacy_crypto.py": LEGACY_CRYPTO_PY,
+    "tests/test_legacy_crypto.py": TEST_LEGACY_CRYPTO_PY,
+}
+
+# 3. Pydantic Serialization Vault (demo_pydantic)
+PYDANTIC_README = """# Northwind Schema Registry
+
+Microservice for data serialization and API payload schemas.
+The current standard enforces Pydantic v2 model_dump() (ADR-032).
+Legacy Pydantic v1 .dict() calls (ADR-008) are deprecated and forbidden.
+"""
+
+PYDANTIC_NOTE_MD = """# Pydantic v2 Migration Guide
+
+Migration from v1 (.dict()) to v2 (model_dump()) completed.
+Direct model.dict() usage is forbidden in production.
+"""
+
+PYDANTIC_FILES = {
+    "README.md": PYDANTIC_README,
+    "docs/adr/008-pydantic-v1.md": ADR_008_MD,
+    "docs/adr/032-pydantic-v2.md": ADR_032_MD,
+    "notes/pydantic_migration.md": PYDANTIC_NOTE_MD,
+    "vault/__init__.py": INIT_PY,
     "vault/schemas.py": SCHEMAS_PY,
     "vault/legacy_schemas.py": LEGACY_SCHEMAS_PY,
+    "tests/test_legacy_schemas.py": TEST_LEGACY_SCHEMAS_PY,
+}
+
+# 4. SQLAlchemy 2.0 Database Vault (demo_sqlalchemy)
+SQLALCHEMY_README = """# Northwind Database Audit Service
+
+Service for querying transactional audit logs.
+The current standard enforces SQLAlchemy 2.0 explicit session queries (ADR-045).
+Direct engine.execute() calls (ADR-010) are removed and strictly forbidden.
+"""
+
+SQLALCHEMY_NOTE_MD = """# Database Architecture Standards
+
+SQLAlchemy 2.0 enforces 2.0-style execution: session.execute(select(...)).
+Direct calls to engine.execute() are removed in 2.0.
+"""
+
+SQLALCHEMY_FILES = {
+    "README.md": SQLALCHEMY_README,
+    "docs/adr/010-legacy-engine-execute.md": ADR_010_MD,
+    "docs/adr/045-sqlalchemy-20.md": ADR_045_MD,
+    "notes/db_standards.md": SQLALCHEMY_NOTE_MD,
+    "vault/__init__.py": INIT_PY,
     "vault/db.py": DB_PY,
     "vault/legacy_db.py": LEGACY_DB_PY,
-    "tests/test_legacy_wrap.py": TEST_LEGACY_WRAP_PY,
-    "tests/test_legacy_crypto.py": TEST_LEGACY_CRYPTO_PY,
-    "tests/test_legacy_schemas.py": TEST_LEGACY_SCHEMAS_PY,
     "tests/test_legacy_db.py": TEST_LEGACY_DB_PY,
 }
+
+ALL_REPOS = {
+    "demo_vault": VAULT_FILES,
+    "demo_pyca": PYCA_FILES,
+    "demo_pydantic": PYDANTIC_FILES,
+    "demo_sqlalchemy": SQLALCHEMY_FILES,
+}
+
 

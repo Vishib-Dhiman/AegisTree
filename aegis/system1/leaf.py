@@ -29,6 +29,12 @@ def select_target(prompt: str, root: Path) -> tuple[Path, str]:
         return root / "vault" / "db.py", "query_audit_trail"
     elif "rotate" in p_low:
         return root / "vault" / "store.py", "rotate_session_token"
+    elif (root / "vault" / "crypto.py").exists() and not (root / "vault" / "store.py").exists():
+        return root / "vault" / "crypto.py", "encrypt_rsa_payload"
+    elif (root / "vault" / "schemas.py").exists() and not (root / "vault" / "store.py").exists():
+        return root / "vault" / "schemas.py", "serialize_vault_payload"
+    elif (root / "vault" / "db.py").exists() and not (root / "vault" / "store.py").exists():
+        return root / "vault" / "db.py", "query_audit_trail"
     else:
         return root / "vault" / "store.py", "persist_session_token"
 

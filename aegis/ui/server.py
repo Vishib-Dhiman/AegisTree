@@ -46,8 +46,8 @@ if config.system2_provider == "ollama":
         raise RuntimeError(f"Web startup error: ollama_base_url host must be 127.0.0.1 or localhost, got '{parsed_url.hostname}'")
 
 workspace_root = Path(config.workspace_root)
-if not workspace_root.exists():
-    seed_vault.write(workspace_root)
+base_parent = workspace_root.parent if workspace_root.is_absolute() else Path(".")
+seed_vault.write_all(base_parent)
 
 storage_dir = Path(config.storage_dir)
 storage_dir.mkdir(parents=True, exist_ok=True)
@@ -135,8 +135,9 @@ def set_model(req: SetModelRequest) -> Dict[str, Any]:
 
 @app.post("/api/reset")
 def reset_demo() -> Dict[str, Any]:
-    # Restore demo_vault from seed constants
-    seed_vault.write(workspace_root)
+    # Restore all demo repositories from seed constants
+    base_parent = workspace_root.parent if workspace_root.is_absolute() else Path(".")
+    seed_vault.write_all(base_parent)
 
     # Re-initialize DB
     db_file = storage_dir / "memory.sqlite"
@@ -852,6 +853,54 @@ def get_workspace() -> Dict[str, Any]:
         "exists": workspace_root.exists(),
         "adr_count": adr_count,
         "note_count": note_count,
+    }
+
+
+@app.get("/api/workspaces")
+def list_workspaces() -> Dict[str, Any]:
+    global workspace_root
+    presets = [
+        {
+            "id": "demo_vault",
+            "name": "demo_vault",
+            "title": "Northwind Session Vault",
+            "domain": "Token Storage",
+            "icon": "🔐",
+            "adrs": ["ADR-014", "ADR-003"],
+            "desc": "Session token persistence, aegis_seal policy, legacy_wrap closure",
+        },
+        {
+            "id": "demo_pyca",
+            "name": "demo_pyca",
+            "title": "PyCA Cryptography",
+            "domain": "Public-Key Crypto",
+            "icon": "🔑",
+            "adrs": ["ADR-021", "ADR-005"],
+            "desc": "RSA payload encryption, OAEP SHA-256 vs PKCS1v15 padding",
+        },
+        {
+            "id": "demo_pydantic",
+            "name": "demo_pydantic",
+            "title": "Pydantic Schemas",
+            "domain": "Data Serialization",
+            "icon": "📦",
+            "adrs": ["ADR-032", "ADR-008"],
+            "desc": "Schema serialization, Pydantic v2 model_dump() vs .dict()",
+        },
+        {
+            "id": "demo_sqlalchemy",
+            "name": "demo_sqlalchemy",
+            "title": "SQLAlchemy 2.0",
+            "domain": "Database Engine",
+            "icon": "🗄️",
+            "adrs": ["ADR-045", "ADR-010"],
+            "desc": "Audit trail queries, session.execute(select(...)) vs engine.execute()",
+        },
+    ]
+    return {
+        "active": workspace_root.name,
+        "active_path": str(workspace_root.resolve()),
+        "presets": presets,
     }
 
 
