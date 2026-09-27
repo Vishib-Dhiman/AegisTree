@@ -54,8 +54,47 @@ def write(
     return root
 
 
+REAL_REPOS_ADRS = {
+    "sqlalchemy": {
+        "docs/adr/010-legacy-engine-execute.md": ALL_REPOS["demo_sqlalchemy"]["docs/adr/010-legacy-engine-execute.md"],
+        "docs/adr/045-sqlalchemy-20.md": ALL_REPOS["demo_sqlalchemy"]["docs/adr/045-sqlalchemy-20.md"],
+        "notes/db_standards.md": ALL_REPOS["demo_sqlalchemy"]["notes/db_standards.md"],
+        "vault/__init__.py": "",
+        "vault/db.py": ALL_REPOS["demo_sqlalchemy"]["vault/db.py"],
+        "vault/legacy_db.py": ALL_REPOS["demo_sqlalchemy"]["vault/legacy_db.py"],
+    },
+    "cryptography": {
+        "docs/adr/005-rsa-pkcs1v15.md": ALL_REPOS["demo_pyca"]["docs/adr/005-rsa-pkcs1v15.md"],
+        "docs/adr/021-rsa-oaep.md": ALL_REPOS["demo_pyca"]["docs/adr/021-rsa-oaep.md"],
+        "notes/crypto_policy.md": ALL_REPOS["demo_pyca"]["notes/crypto_policy.md"],
+        "vault/__init__.py": "",
+        "vault/crypto.py": ALL_REPOS["demo_pyca"]["vault/crypto.py"],
+        "vault/legacy_crypto.py": ALL_REPOS["demo_pyca"]["vault/legacy_crypto.py"],
+    },
+    "pydantic": {
+        "docs/adr/008-pydantic-v1.md": ALL_REPOS["demo_pydantic"]["docs/adr/008-pydantic-v1.md"],
+        "docs/adr/032-pydantic-v2.md": ALL_REPOS["demo_pydantic"]["docs/adr/032-pydantic-v2.md"],
+        "notes/pydantic_migration.md": ALL_REPOS["demo_pydantic"]["notes/pydantic_migration.md"],
+        "vault/__init__.py": "",
+        "vault/schemas.py": ALL_REPOS["demo_pydantic"]["vault/schemas.py"],
+        "vault/legacy_schemas.py": ALL_REPOS["demo_pydantic"]["vault/legacy_schemas.py"],
+    },
+}
+
+
+def sync_real_repos(base_dir: Union[str, Path] = ".") -> None:
+    repos_dir = Path(base_dir) / "repos"
+    for repo_name, files in REAL_REPOS_ADRS.items():
+        repo_path = repos_dir / repo_name
+        if repo_path.exists() and repo_path.is_dir():
+            for rel_path, content in files.items():
+                p = repo_path / rel_path
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding="utf-8")
+
+
 def write_all(base_dir: Union[str, Path] = ".") -> None:
     base = Path(base_dir)
-    for repo_name in ALL_REPOS.keys():
-        write(base / repo_name, clean_extra=True, repo_key=repo_name)
+    write(base / "demo_vault", clean_extra=True, repo_key="demo_vault")
+    sync_real_repos(base)
 

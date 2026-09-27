@@ -32,4 +32,8 @@ Verdict-open-jev/
 *.onnx
 *.safetensors
 demo_vault/
+repos/
+demo_pyca/
+demo_pydantic/
+demo_sqlalchemy/
 

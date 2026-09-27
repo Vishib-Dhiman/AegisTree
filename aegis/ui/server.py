@@ -36,6 +36,9 @@ from aegis.system2.prompt import (
 )
 
 
+# Project root directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 # Configuration verification
 config = config_manager.config
 
@@ -46,8 +49,9 @@ if config.system2_provider == "ollama":
         raise RuntimeError(f"Web startup error: ollama_base_url host must be 127.0.0.1 or localhost, got '{parsed_url.hostname}'")
 
 workspace_root = Path(config.workspace_root)
-base_parent = workspace_root.parent if workspace_root.is_absolute() else Path(".")
-seed_vault.write_all(base_parent)
+if not workspace_root.is_absolute():
+    workspace_root = (PROJECT_ROOT / workspace_root).resolve()
+seed_vault.write_all(PROJECT_ROOT)
 
 storage_dir = Path(config.storage_dir)
 storage_dir.mkdir(parents=True, exist_ok=True)
@@ -136,8 +140,7 @@ def set_model(req: SetModelRequest) -> Dict[str, Any]:
 @app.post("/api/reset")
 def reset_demo() -> Dict[str, Any]:
     # Restore all demo repositories from seed constants
-    base_parent = workspace_root.parent if workspace_root.is_absolute() else Path(".")
-    seed_vault.write_all(base_parent)
+    seed_vault.write_all(PROJECT_ROOT)
 
     # Re-initialize DB
     db_file = storage_dir / "memory.sqlite"
@@ -863,38 +866,46 @@ def list_workspaces() -> Dict[str, Any]:
         {
             "id": "demo_vault",
             "name": "demo_vault",
+            "path": "demo_vault",
+            "repo_url": None,
             "title": "Northwind Session Vault",
             "domain": "Token Storage",
             "icon": "🔐",
             "adrs": ["ADR-014", "ADR-003"],
-            "desc": "Session token persistence, aegis_seal policy, legacy_wrap closure",
+            "desc": "Local demo vault: Session token persistence, aegis_seal policy, legacy_wrap closure",
         },
         {
-            "id": "demo_pyca",
-            "name": "demo_pyca",
-            "title": "PyCA Cryptography",
+            "id": "cryptography",
+            "name": "cryptography",
+            "path": "repos/cryptography",
+            "repo_url": "https://github.com/pyca/cryptography",
+            "title": "pyca/cryptography (GitHub)",
             "domain": "Public-Key Crypto",
             "icon": "🔑",
             "adrs": ["ADR-021", "ADR-005"],
-            "desc": "RSA payload encryption, OAEP SHA-256 vs PKCS1v15 padding",
+            "desc": "Real GitHub repo (pyca/cryptography): RSA payload encryption, OAEP SHA-256 vs PKCS1v15 padding",
         },
         {
-            "id": "demo_pydantic",
-            "name": "demo_pydantic",
-            "title": "Pydantic Schemas",
+            "id": "pydantic",
+            "name": "pydantic",
+            "path": "repos/pydantic",
+            "repo_url": "https://github.com/pydantic/pydantic",
+            "title": "pydantic/pydantic (GitHub)",
             "domain": "Data Serialization",
             "icon": "📦",
             "adrs": ["ADR-032", "ADR-008"],
-            "desc": "Schema serialization, Pydantic v2 model_dump() vs .dict()",
+            "desc": "Real GitHub repo (pydantic/pydantic): Schema serialization, Pydantic v2 model_dump() vs .dict()",
         },
         {
-            "id": "demo_sqlalchemy",
-            "name": "demo_sqlalchemy",
-            "title": "SQLAlchemy 2.0",
+            "id": "sqlalchemy",
+            "name": "sqlalchemy",
+            "path": "repos/sqlalchemy",
+            "repo_url": "https://github.com/sqlalchemy/sqlalchemy",
+            "title": "sqlalchemy/sqlalchemy (GitHub)",
             "domain": "Database Engine",
             "icon": "🗄️",
             "adrs": ["ADR-045", "ADR-010"],
-            "desc": "Audit trail queries, session.execute(select(...)) vs engine.execute()",
+            "desc": "Real GitHub repo (sqlalchemy/sqlalchemy): Audit trail queries, session.execute(select(...)) vs engine.execute()",
         },
     ]
     return {
@@ -907,9 +918,23 @@ def list_workspaces() -> Dict[str, Any]:
 @app.post("/api/workspace")
 def switch_workspace(req: SwitchWorkspaceRequest) -> Dict[str, Any]:
     global workspace_root
-    target_path = Path(req.path.strip()).expanduser()
-    if not target_path.is_absolute():
-        target_path = (Path.cwd() / target_path).resolve()
+    raw = req.path.strip()
+    preset_shortcuts = {
+        "demo_vault": PROJECT_ROOT / "demo_vault",
+        "cryptography": PROJECT_ROOT / "repos" / "cryptography",
+        "pyca": PROJECT_ROOT / "repos" / "cryptography",
+        "demo_pyca": PROJECT_ROOT / "repos" / "cryptography",
+        "pydantic": PROJECT_ROOT / "repos" / "pydantic",
+        "demo_pydantic": PROJECT_ROOT / "repos" / "pydantic",
+        "sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
+        "demo_sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
+    }
+    if raw in preset_shortcuts:
+        target_path = preset_shortcuts[raw].resolve()
+    else:
+        target_path = Path(raw).expanduser()
+        if not target_path.is_absolute():
+            target_path = (PROJECT_ROOT / target_path).resolve()
 
     if not target_path.exists():
         raise HTTPException(status_code=400, detail=f"Directory '{target_path}' does not exist on disk.")

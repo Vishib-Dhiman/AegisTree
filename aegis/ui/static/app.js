@@ -78,12 +78,14 @@ function initEventListeners() {
   const SCENARIO_REPO_MAP = {
     persist: "demo_vault",
     rotate: "demo_vault",
-    pyca_oaep: "demo_pyca",
-    pyca_pkcs1: "demo_pyca",
-    pydantic_v2: "demo_pydantic",
-    pydantic_v1: "demo_pydantic",
-    db_sqlalchemy: "demo_sqlalchemy",
-    db_engine: "demo_sqlalchemy",
+    force_legacy: "demo_vault",
+    pyca_oaep: "cryptography",
+    pyca_pkcs: "cryptography",
+    pyca_pkcs1: "cryptography",
+    pydantic_v2: "pydantic",
+    pydantic_v1: "pydantic",
+    db_sqlalchemy: "sqlalchemy",
+    db_engine: "sqlalchemy",
   };
 
   document.querySelectorAll("[data-prompt]").forEach(elem => {
@@ -321,10 +323,11 @@ async function initWorkspace() {
           card.className = "workspace-card" + (isActive ? " active" : "");
           card.innerHTML = `
             <div class="workspace-card-header">
-              <span class="workspace-card-title">${p.icon} ${escapeHtml(p.name)}</span>
+              <span class="workspace-card-title">${p.icon} ${escapeHtml(p.title || p.name)}</span>
               <span class="workspace-card-badge">${isActive ? "● Active" : escapeHtml(p.domain)}</span>
             </div>
             <div class="workspace-card-desc">${escapeHtml(p.desc)}</div>
+            ${p.repo_url ? `<div class="workspace-card-url" style="font-size: 11px; margin-top: 4px; word-break: break-all;"><a href="${escapeHtml(p.repo_url)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: underline;" onclick="event.stopPropagation();">${escapeHtml(p.repo_url)} ↗</a></div>` : ''}
             <div class="workspace-card-meta">
               <span class="workspace-card-adrs">${p.adrs.join(" &middot; ")}</span>
             </div>
@@ -335,7 +338,7 @@ async function initWorkspace() {
               return;
             }
             try {
-              await switchToWorkspace(p.id);
+              await switchToWorkspace(p.path || p.id);
               closeWorkspaceModal();
             } catch (err) {
               alert("Failed to switch: " + err.message);
