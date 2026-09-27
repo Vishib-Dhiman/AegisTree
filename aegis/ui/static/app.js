@@ -242,6 +242,121 @@ async function initModelSelector() {
 let currentModalAdrId = null;
 let currentModalAdrData = null;
 let isAdrModalCreateMode = false;
+let isGeneratingAdr = false;
+
+function updateAdrPromptBadge() {
+  const badge = document.getElementById("adr-prompt-badge");
+  const contentInput = document.getElementById("adr-edit-content");
+  const modelSelect = document.getElementById("select-model");
+  const modelName = modelSelect && modelSelect.options[modelSelect.selectedIndex] ? modelSelect.options[modelSelect.selectedIndex].text : "Local SLM";
+  if (!badge || !contentInput) return;
+
+  const val = contentInput.value;
+  const idx = val.indexOf("/prompt");
+  if (idx !== -1) {
+    const textAfter = val.slice(idx + 7).trim();
+    badge.classList.add("active");
+    if (textAfter) {
+      badge.innerHTML = `<span class="adr-prompt-sparkle">✨</span> Press <strong>Enter</strong> to generate with <strong>${escapeHtml(modelName)}</strong>`;
+    } else {
+      badge.innerHTML = `<span class="adr-prompt-sparkle">✨</span> Type instruction after <code>/prompt</code> + Enter`;
+    }
+  } else {
+    badge.classList.remove("active");
+    badge.innerHTML = `<span class="adr-prompt-sparkle">✨</span> Type <code>/prompt &lt;instruction&gt;</code> + Enter to AI generate`;
+  }
+}
+
+async function triggerAdrGeneration(instruction) {
+  if (isGeneratingAdr) return;
+  const contentInput = document.getElementById("adr-edit-content");
+  const filenameInput = document.getElementById("adr-edit-filename");
+  const statusEl = document.getElementById("adr-generating-status");
+  const statusText = document.getElementById("adr-generating-status-text");
+  const btnSave = document.getElementById("btn-adr-save");
+  const modelSelect = document.getElementById("select-model");
+  const selectedModel = modelSelect ? modelSelect.value : null;
+  const modelName = modelSelect && modelSelect.options[modelSelect.selectedIndex] ? modelSelect.options[modelSelect.selectedIndex].text : "Local SLM";
+
+  isGeneratingAdr = true;
+  if (btnSave) btnSave.disabled = true;
+  if (contentInput) {
+    contentInput.disabled = true;
+    contentInput.value = "";
+  }
+  if (statusEl) statusEl.style.display = "flex";
+  if (statusText) statusText.textContent = `Reasoning with ${modelName}...`;
+
+  try {
+    const res = await fetch("/api/adr/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: instruction,
+        model_id: selectedModel
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "ADR generation failed");
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let accumulatedText = "";
+    let sseBuffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sseBuffer += decoder.decode(value, { stream: true });
+
+      const lines = sseBuffer.split("\n");
+      sseBuffer = lines.pop();
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const rawJson = line.slice(6).trim();
+          if (!rawJson) continue;
+          try {
+            const data = JSON.parse(rawJson);
+            if (data.type === "thinking") {
+              if (statusText) {
+                const preview = data.chunk.trim().slice(-60);
+                statusText.textContent = preview ? `Reasoning: ${preview}` : `Reasoning with ${modelName}...`;
+              }
+            } else if (data.type === "response") {
+              accumulatedText += data.chunk;
+              if (contentInput) contentInput.value = accumulatedText;
+              if (statusText) statusText.textContent = `Generating ADR specification with ${modelName}...`;
+            } else if (data.type === "finished") {
+              if (contentInput) contentInput.value = data.content;
+              if (filenameInput && data.filename && isAdrModalCreateMode) {
+                filenameInput.value = data.filename;
+              }
+            } else if (data.type === "error") {
+              throw new Error(data.detail);
+            }
+          } catch (pe) {
+            console.warn("SSE parse error:", pe, rawJson);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    alert("Error generating ADR: " + err.message);
+  } finally {
+    isGeneratingAdr = false;
+    if (contentInput) {
+      contentInput.disabled = false;
+      contentInput.focus();
+    }
+    if (btnSave) btnSave.disabled = false;
+    if (statusEl) statusEl.style.display = "none";
+    updateAdrPromptBadge();
+  }
+}
 
 function initAdrModal() {
   const backdrop = document.getElementById("adr-modal-backdrop");
@@ -251,6 +366,8 @@ function initAdrModal() {
   const btnCancelEdit = document.getElementById("btn-adr-cancel-edit");
   const btnSave = document.getElementById("btn-adr-save");
   const btnAddAdr = document.getElementById("btn-add-adr");
+  const contentInput = document.getElementById("adr-edit-content");
+  const promptBadge = document.getElementById("adr-prompt-badge");
 
   if (btnAddAdr) {
     btnAddAdr.addEventListener("click", () => openAdrModal(null, true));
@@ -272,6 +389,42 @@ function initAdrModal() {
     }
   });
 
+  if (contentInput) {
+    contentInput.addEventListener("input", updateAdrPromptBadge);
+    contentInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        const val = contentInput.value;
+        const idx = val.indexOf("/prompt");
+        if (idx !== -1) {
+          const instruction = val.slice(idx + 7).trim();
+          if (instruction) {
+            e.preventDefault();
+            triggerAdrGeneration(instruction);
+          }
+        }
+      }
+    });
+  }
+
+  if (promptBadge) {
+    promptBadge.addEventListener("click", () => {
+      if (!contentInput) return;
+      const val = contentInput.value;
+      const idx = val.indexOf("/prompt");
+      if (idx !== -1) {
+        const instruction = val.slice(idx + 7).trim();
+        if (instruction) {
+          triggerAdrGeneration(instruction);
+          return;
+        }
+      } else {
+        contentInput.value = "/prompt " + (val.trim() ? val.trim() : "");
+      }
+      contentInput.focus();
+      updateAdrPromptBadge();
+    });
+  }
+
   if (btnToggleEdit) {
     btnToggleEdit.addEventListener("click", () => {
       const viewEl = document.getElementById("adr-modal-view");
@@ -281,6 +434,7 @@ function initAdrModal() {
         editEl.style.display = "flex";
         btnToggleEdit.textContent = "Preview";
         document.getElementById("adr-edit-content").focus();
+        updateAdrPromptBadge();
       } else {
         editEl.style.display = "none";
         viewEl.style.display = "flex";
@@ -422,26 +576,14 @@ async function openAdrModal(adrId, isCreate = false) {
 
     const dateStr = new Date().toISOString().split("T")[0];
     filenameInput.value = "046-new-architecture-decision.md";
-    contentInput.value = `# ADR-046: New Architecture Decision
-
-- Status: Accepted
-- Date: ${dateStr}
-- Supersedes: None
-- Tags: architecture, security, production
-
-## Decision
-Describe the architectural rule, function call standards, or library constraints here.
-
-## Required
-- required_symbol_or_keyword
-
-## Forbidden
-- deprecated_or_insecure_symbol
-`;
+    contentInput.value = "";
+    contentInput.placeholder = "Type /prompt <instructions> and press Enter (e.g. /prompt Enforce that all HTTP clients use httpx with verify=True)... or write ADR markdown";
+    updateAdrPromptBadge();
 
     viewEl.style.display = "none";
     editEl.style.display = "flex";
     backdrop.style.display = "flex";
+    setTimeout(() => contentInput.focus(), 50);
     return;
   }
 
@@ -512,6 +654,7 @@ Describe the architectural rule, function call standards, or library constraints
 
     document.getElementById("adr-view-raw").textContent = data.content || "";
     contentInput.value = data.content || "";
+    updateAdrPromptBadge();
 
   } catch (err) {
     titleEl.textContent = "Error loading ADR";

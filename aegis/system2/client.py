@@ -199,6 +199,34 @@ class MockGenerator:
         t0 = time.perf_counter()
 
         p_low = prompt.lower()
+        if "architecture decision" in p_low or "principal software architect" in p_low or "assigned adr number" in p_low:
+            m_req = re.search(r'for the following requirement:\s*["\']?(.*?)["\']?\s*\n', prompt, re.IGNORECASE)
+            req_text = m_req.group(1).strip() if m_req else "Enforce sovereign architectural policy"
+            m_num = re.search(r'assigned adr number:\s*(adr-\d+)', prompt, re.IGNORECASE)
+            adr_num = m_num.group(1).upper() if m_num else "ADR-046"
+            title = req_text[:45].strip().title()
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            adr_md = (
+                f"# {adr_num}: {title}\n\n"
+                f"- Status: Accepted\n"
+                f"- Date: {date_str}\n"
+                f"- Supersedes: None\n"
+                f"- Tags: architecture, standards, security\n\n"
+                f"## Decision\n"
+                f"Production code must strictly adhere to the following requirement: {req_text}.\n\n"
+                f"## Required\n"
+                f"- compliant_symbol\n\n"
+                f"## Forbidden\n"
+                f"- none\n"
+            )
+            return Generation(
+                text=adr_md,
+                thinking="Reasoning with local SLM on architectural requirements...\nExtracted policy constraints and formatted valid ADR.",
+                latency_ms=(time.perf_counter() - t0) * 1000.0,
+                model=self.model,
+                backend="mock",
+            )
+
         if "session_token" in p_low or ("session" in p_low and "token" in p_low) or "aegis_seal" in p_low:
             m_retries = re.search(r"must set retries=(\d+)", prompt) or re.search(r"retries=(\d+)", prompt)
             retries = int(m_retries.group(1)) if m_retries else 3

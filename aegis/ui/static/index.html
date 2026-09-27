@@ -418,8 +418,17 @@
             <input id="adr-edit-filename" class="adr-text-input" placeholder="046-my-decision.md" spellcheck="false" />
           </div>
           <div class="adr-field-group" style="flex: 1 1 auto; display: flex; flex-direction: column;">
-            <label class="adr-field-label">ADR Markdown Content</label>
-            <textarea id="adr-edit-content" class="adr-markdown-editor" spellcheck="false" placeholder="# ADR-0XX: Title..."></textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label class="adr-field-label" style="margin-bottom: 0;">ADR Markdown Content</label>
+              <div id="adr-prompt-badge" class="adr-prompt-indicator" title="Type /prompt <instructions> then press Enter to generate with local SLM">
+                <span class="adr-prompt-sparkle">✨</span> Type <code>/prompt &lt;instruction&gt;</code> + Enter to AI generate
+              </div>
+            </div>
+            <textarea id="adr-edit-content" class="adr-markdown-editor" spellcheck="false" placeholder="# ADR-0XX: Title... or type /prompt <instructions> to generate with chosen SLM"></textarea>
+            <div id="adr-generating-status" class="adr-generating-status" style="display: none;">
+              <span class="spinner-sm"></span>
+              <span id="adr-generating-status-text">Reasoning with Local SLM...</span>
+            </div>
           </div>
           <div class="adr-edit-footer">
             <button id="btn-adr-cancel-edit" class="btn-xs-secondary">Cancel</button>
@@ -431,6 +440,6 @@
 
   </div>
 
-  <script src="app.js?v=2.5"></script>
+  <script src="app.js?v=2.6"></script>
 </body>
 </html>

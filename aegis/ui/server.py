@@ -968,7 +968,140 @@ def delete_adr(adr_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
 
     _reload_workspace_memory()
-    return {"status": "ok", "deleted": filepath.name}
+class GenerateAdrRequest(BaseModel):
+    prompt: str
+    model_id: Optional[str] = None
+
+
+@app.post("/api/adr/generate")
+def generate_adr_stream(req: GenerateAdrRequest):
+    global generator
+    if req.model_id and req.model_id != config_manager.config.system2_model_id:
+        config_manager.set_system2_model(req.model_id)
+        if config_manager.config.system2_provider == "mock":
+            generator = MockGenerator(config=config_manager.config)
+        else:
+            generator = OllamaGenerator(config=config_manager.config)
+
+    user_prompt = req.prompt.strip()
+    if user_prompt.startswith("/prompt"):
+        user_prompt = user_prompt[7:].strip()
+    if not user_prompt:
+        user_prompt = "Establish our new production architecture decision"
+
+    # Compute next ADR number from docs/adr/
+    adr_dir = workspace_root / "docs" / "adr"
+    existing_nums = []
+    if adr_dir.exists():
+        for f in adr_dir.glob("*.md"):
+            m = re.match(r"^(\d+)", f.name)
+            if m:
+                existing_nums.append(int(m.group(1)))
+    next_num = (max(existing_nums) + 1) if existing_nums else 46
+    adr_num_str = f"{next_num:03d}"
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    system_prompt = (
+        f"You are a principal software architect generating a formal Architecture Decision Record (ADR) for our repository.\n"
+        f"Generate a complete, high-quality Architecture Decision Record in Markdown format for the following requirement:\n"
+        f"\"{user_prompt}\"\n\n"
+        f"Today's date: {today_str}\n"
+        f"Assigned ADR number: ADR-{adr_num_str}\n\n"
+        f"You MUST format your response strictly as this Markdown document:\n\n"
+        f"# ADR-{adr_num_str}: <Short Descriptive Title>\n\n"
+        f"- Status: Accepted\n"
+        f"- Date: {today_str}\n"
+        f"- Supersedes: None\n"
+        f"- Tags: <comma-separated lowercase tags, e.g. security, database, api>\n\n"
+        f"## Decision\n"
+        f"<Clear, concise architectural statement explaining what production code must do and why. 1-2 paragraphs.>\n\n"
+        f"## Required\n"
+        f"- <exact code token, symbol, or parameter required>\n\n"
+        f"## Forbidden\n"
+        f"- <deprecated, insecure, or banned token or symbol; or 'none'>\n\n"
+        f"STRICT INSTRUCTIONS:\n"
+        f"1. Output ONLY the raw Markdown text. Do NOT wrap the entire output in markdown code fences (```markdown).\n"
+        f"2. Ensure the '## Required' section lists concrete literal symbols or keyword calls (e.g. - aegis_seal, - session.execute).\n"
+        f"3. Ensure the '## Forbidden' section lists legacy or banned symbols (e.g. - legacy_wrap, - engine.execute) or - none.\n"
+        f"4. Keep the text professional, concise, and definitive.\n"
+    )
+
+    def event_stream():
+        accumulated_text = ""
+        accumulated_thinking = ""
+        in_think_tag = False
+        try:
+            for chunk in generator.complete_stream(system_prompt):
+                thinking_chunk = chunk.get("thinking", "")
+                response_chunk = chunk.get("response", "")
+                if thinking_chunk:
+                    accumulated_thinking += thinking_chunk
+                    yield f"data: {json.dumps({'type': 'thinking', 'chunk': thinking_chunk})}\n\n"
+                if response_chunk:
+                    # Filter inline <think> tags from thinking models
+                    if "<think>" in response_chunk:
+                        in_think_tag = True
+                        parts = response_chunk.split("<think>", 1)
+                        if parts[0]:
+                            accumulated_text += parts[0]
+                            yield f"data: {json.dumps({'type': 'response', 'chunk': parts[0]})}\n\n"
+                        response_chunk = parts[1]
+                    if in_think_tag:
+                        if "</think>" in response_chunk:
+                            t_parts = response_chunk.split("</think>", 1)
+                            accumulated_thinking += t_parts[0]
+                            yield f"data: {json.dumps({'type': 'thinking', 'chunk': t_parts[0]})}\n\n"
+                            in_think_tag = False
+                            if t_parts[1]:
+                                accumulated_text += t_parts[1]
+                                yield f"data: {json.dumps({'type': 'response', 'chunk': t_parts[1]})}\n\n"
+                        else:
+                            accumulated_thinking += response_chunk
+                            yield f"data: {json.dumps({'type': 'thinking', 'chunk': response_chunk})}\n\n"
+                    else:
+                        accumulated_text += response_chunk
+                        yield f"data: {json.dumps({'type': 'response', 'chunk': response_chunk})}\n\n"
+        except Exception as e:
+            err_msg = f"Error generating ADR: {e}"
+            yield f"data: {json.dumps({'type': 'error', 'detail': err_msg})}\n\n"
+            return
+
+        # Strip <think> tags if model output them inside response
+        if not accumulated_thinking and "<think>" in accumulated_text and "</think>" in accumulated_text:
+            m = re.search(r"<think>(.*?)</think>", accumulated_text, re.DOTALL)
+            if m:
+                accumulated_thinking = m.group(1).strip()
+                accumulated_text = re.sub(r"<think>.*?</think>", "", accumulated_text, flags=re.DOTALL).strip()
+
+        # Clean markdown code block fences if model wrapped the whole document
+        cleaned_content = accumulated_text.strip()
+        if cleaned_content.startswith("```markdown"):
+            cleaned_content = cleaned_content[11:].strip()
+        elif cleaned_content.startswith("```"):
+            cleaned_content = cleaned_content[3:].strip()
+        if cleaned_content.endswith("```"):
+            cleaned_content = cleaned_content[:-3].strip()
+
+        # Suggest filename from ADR Title
+        suggested_filename = f"{adr_num_str}-new-decision.md"
+        title_match = re.search(r"^#\s+(?:ADR-\d+[\:\-\s]*)?(.+)$", cleaned_content, re.MULTILINE)
+        if title_match:
+            raw_title = title_match.group(1).strip()
+            slug = re.sub(r"[^\w\s-]", "", raw_title.lower())
+            slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:40]
+            if slug:
+                suggested_filename = f"{adr_num_str}-{slug}.md"
+
+        finished_payload = {
+            "type": "finished",
+            "content": cleaned_content,
+            "filename": suggested_filename,
+            "thinking": accumulated_thinking,
+        }
+        yield f"data: {json.dumps(finished_payload, default=str)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # Mount static files at root
