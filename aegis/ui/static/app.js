@@ -1,4 +1,4 @@
-// AegisTree Sovereign AI Assistant Client
+// ClearSky Sovereign AI Assistant Client
 
 let currentRunId = null;
 let activeThreadId = null;
@@ -1241,7 +1241,7 @@ function renderAssistantResponse(container, data, promptText) {
         <code>${escapeHtml(data.blocked_literal || "")}</code> is forbidden by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>.
       </div>
       <div style="font-size: 12.5px; color: #fca5a5;">
-        AegisTree physically blocked generation before model invocation because this architectural pattern has been superseded. Zero tokens wasted.
+        ClearSky physically blocked generation before model invocation because this architectural pattern has been superseded. Zero tokens wasted.
       </div>
     `;
     container.appendChild(banner);
@@ -1262,7 +1262,7 @@ function renderAssistantResponse(container, data, promptText) {
         ${escapeHtml(data.abstain_reason || "No accepted architecture decision covers this request.")}
       </div>
       <div style="font-size: 12.5px; color: #fde68a;">
-        AegisTree refuses to hallucinate code without an in-force Architecture Decision Record (ADR).
+        ClearSky refuses to hallucinate code without an in-force Architecture Decision Record (ADR).
       </div>
     `;
     container.appendChild(banner);
@@ -1341,7 +1341,7 @@ function renderAssistantResponse(container, data, promptText) {
     <div class="code-card-header">
       <div style="display:flex; align-items:center; gap:8px;">
         <span style="font-weight:600; font-size:13px; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
-          <span style="color:var(--accent-green); font-size:11px;">●</span> AegisTree Patch (Compliant)
+          <span style="color:var(--accent-green); font-size:11px;">●</span> ClearSky Patch (Compliant)
         </span>
         <span class="file-badge">${escapeHtml(targetFileLabel)}</span>
         <span class="review-hint" style="font-size:11.5px; color:var(--text-muted); margin-left:4px;">Tip: edit retries or timeout_s to train organizational memory</span>
@@ -1947,7 +1947,7 @@ function renderDiffInspectorContent(container) {
       </div>
       <div class="diff-inspector-meta-pills">
         <span class="diff-inspector-pill">Baseline: ${baselineTokens} tokens</span>
-        <span class="diff-inspector-pill highlight">AegisTree: ${leafTokens} tokens (-${compressionPct}%)</span>
+        <span class="diff-inspector-pill highlight">ClearSky: ${leafTokens} tokens (-${compressionPct}%)</span>
         <span class="diff-inspector-pill">Verdict: ~${latMs}ms</span>
         <button class="diff-return-chat-btn" id="btn-inspector-to-chat">💬 Back to Chat</button>
       </div>
@@ -1968,7 +1968,7 @@ function renderDiffInspectorContent(container) {
       <div class="diff-pane aegis">
         <div class="diff-pane-header">
           <div class="diff-pane-title">
-            <span>🛡️ AegisTree Patch</span>
+            <span>🛡️ ClearSky Patch</span>
             <span class="diff-pane-badge">100% Policy Compliant</span>
           </div>
           <span class="code-meta">${leafTokens} tokens &middot; -${compressionPct}%</span>

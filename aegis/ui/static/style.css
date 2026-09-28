@@ -83,6 +83,14 @@ body {
   gap: 8px;
 }
 
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
 .brand-sparkle {
   color: var(--accent-cyan);
   font-size: 18px;
@@ -726,10 +734,19 @@ body {
 }
 
 .hero-emblem {
-  font-size: 38px;
-  color: var(--accent-cyan);
-  margin-bottom: 14px;
-  text-shadow: 0 0 24px rgba(56, 189, 248, 0.6);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hero-emblem-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 30px rgba(56, 189, 248, 0.45), 0 0 0 2px rgba(56, 189, 248, 0.25);
+  animation: pulse-glow 3s infinite ease-in-out;
 }
 
 .hero-title {
