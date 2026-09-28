@@ -136,7 +136,7 @@ Enforce a strict 300-second session time-to-live. Re-issuance requires a cryptog
 
 OWNERS_MD = """# Owners
 
-Priya owns the session vault.
+Vishib owns the session vault.
 This repository stays on the club workstation.
 Decisions live in docs/adr. A note in chat does not change a decision.
 
