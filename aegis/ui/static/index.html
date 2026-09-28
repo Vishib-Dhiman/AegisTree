@@ -202,6 +202,7 @@
           <div class="mode-switcher-pill">
             <button id="btn-mode-chat" class="mode-pill-btn active">Chat</button>
             <button id="btn-toggle-diff-mode" class="mode-pill-btn">Diff Inspector</button>
+            <button id="btn-toggle-graph-view" class="mode-pill-btn">📊 Visual Graph</button>
           </div>
         </div>
 
@@ -326,6 +327,7 @@
           <span class="drawer-subtitle">Bi-temporal lineage &middot; valid_from &middot; deprecated_at</span>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
+          <button id="btn-open-visual-graph" class="btn-xs-primary" style="display: flex; align-items: center; gap: 4px;" title="Open Interactive 2D Graph Visualizer"><span>📊</span> Visual Graph</button>
           <button id="btn-reset-drawer" class="btn-xs-danger" title="Reset all ADRs, habits, and memory graph to original defaults">Reset Graph</button>
           <button id="btn-close-drawer" class="icon-btn-ghost">&times;</button>
         </div>
@@ -353,6 +355,50 @@
         <div class="drawer-section">
           <h3 class="drawer-section-title">Team Context &amp; Knowledge</h3>
           <ul id="memory-notes" class="memory-tree-list notes"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Interactive Bitemporal Graph Visualizer Modal -->
+    <div id="graph-modal-backdrop" class="modal-backdrop" style="display: none; z-index: 1200;">
+      <div class="graph-modal-dialog">
+        <div class="graph-modal-header">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <h3 class="adr-modal-title">Bitemporal Knowledge Graph</h3>
+              <span class="status-badge blue" id="graph-node-count-badge">Loading...</span>
+            </div>
+            <span class="drawer-subtitle">Interactive DAG: Active decisions, supersession lineage, learned habits, and project state</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="btn-graph-reset-zoom" class="btn-xs-secondary">Reset View</button>
+            <button id="btn-graph-close" class="icon-btn-ghost">&times;</button>
+          </div>
+        </div>
+        <div class="graph-modal-body">
+          <svg id="memory-graph-svg" class="memory-graph-svg" width="100%" height="100%">
+            <defs>
+              <pattern id="graph-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                <circle cx="15" cy="15" r="1" fill="rgba(255, 255, 255, 0.08)" />
+              </pattern>
+              <marker id="arrow-supersedes" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#ef4444" />
+              </marker>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#graph-grid)" />
+            <g id="graph-viewport"></g>
+          </svg>
+          <div id="graph-tooltip" class="graph-tooltip" style="display: none;"></div>
+        </div>
+        <div class="graph-modal-footer">
+          <div class="graph-legend">
+            <span class="legend-item"><span class="legend-dot green"></span> In-Force Active ADR</span>
+            <span class="legend-item"><span class="legend-dot red"></span> Superseded / Banned ADR</span>
+            <span class="legend-item"><span class="legend-dot purple"></span> Learned Habit</span>
+            <span class="legend-item"><span class="legend-dot cyan"></span> Project Note</span>
+            <span class="legend-item"><span class="legend-line red"></span> Supersedes Lineage (Closure Ban)</span>
+          </div>
+          <span class="graph-footer-hint">Tip: Drag canvas to pan · Scroll to zoom · Click node to inspect details</span>
         </div>
       </div>
     </div>

@@ -806,6 +806,38 @@ def get_memory() -> Dict[str, Any]:
     }
 
 
+@app.get("/api/memory/graph")
+def get_memory_graph() -> Dict[str, Any]:
+    all_nodes = graph.all_nodes()
+    all_edges = graph.all_edges()
+    return {
+        "nodes": [
+            {
+                "id": n.id,
+                "label": n.label,
+                "type": n.type.value,
+                "epistemic_status": n.epistemic_status.value,
+                "valid_from": n.valid_from.isoformat() if n.valid_from else None,
+                "superseded_at": n.superseded_at.isoformat() if n.superseded_at else None,
+                "why_inactive": n.metadata.get("why_inactive", ""),
+                "required": n.required_literals,
+                "forbidden": n.forbidden_literals,
+                "tags": n.tags,
+            }
+            for n in all_nodes
+        ],
+        "edges": [
+            {
+                "source": e.source,
+                "target": e.target,
+                "relation": e.relation,
+                "valid_from": e.valid_from.isoformat() if e.valid_from else None,
+            }
+            for e in all_edges
+        ],
+    }
+
+
 @app.get("/api/tools")
 def get_tools() -> List[Dict[str, str]]:
     return [

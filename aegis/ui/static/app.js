@@ -40,6 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initWorkspace();
   initMemory();
   initAdrModal();
+  initVisualGraph();
   initThreads();
   initEventListeners();
 });
@@ -1951,4 +1952,458 @@ function renderDiffInspectorContent(container) {
   if (btnBack) {
     btnBack.addEventListener("click", () => setAppMode("chat"));
   }
+}
+
+/* ==============================================================================
+   Interactive Bitemporal Graph Visualizer
+   ============================================================================== */
+
+let graphTransform = { x: 40, y: 40, scale: 0.85 };
+let isGraphPanning = false;
+let graphPanStart = { x: 0, y: 0 };
+let currentGraphData = { nodes: [], edges: [] };
+
+function initVisualGraph() {
+  const btnToggleTop = document.getElementById("btn-toggle-graph-view");
+  const btnOpenDrawer = document.getElementById("btn-open-visual-graph");
+  const btnClose = document.getElementById("btn-graph-close");
+  const btnReset = document.getElementById("btn-graph-reset-zoom");
+  const backdrop = document.getElementById("graph-modal-backdrop");
+  const svg = document.getElementById("memory-graph-svg");
+
+  if (btnToggleTop) {
+    btnToggleTop.addEventListener("click", () => openVisualGraphModal());
+  }
+
+  if (btnOpenDrawer) {
+    btnOpenDrawer.addEventListener("click", () => openVisualGraphModal());
+  }
+
+  if (btnClose) {
+    btnClose.addEventListener("click", closeVisualGraphModal);
+  }
+
+  if (btnReset) {
+    btnReset.addEventListener("click", resetGraphView);
+  }
+
+  if (backdrop) {
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeVisualGraphModal();
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && backdrop && backdrop.style.display !== "none") {
+      closeVisualGraphModal();
+    }
+  });
+
+  if (svg) {
+    svg.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest(".graph-node-group")) return;
+      isGraphPanning = true;
+      graphPanStart = { x: e.clientX - graphTransform.x, y: e.clientY - graphTransform.y };
+      svg.style.cursor = "grabbing";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isGraphPanning) return;
+      graphTransform.x = e.clientX - graphPanStart.x;
+      graphTransform.y = e.clientY - graphPanStart.y;
+      updateGraphTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (isGraphPanning) {
+        isGraphPanning = false;
+        if (svg) svg.style.cursor = "grab";
+      }
+    });
+
+    svg.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
+        const newScale = Math.min(Math.max(graphTransform.scale * zoomFactor, 0.25), 2.5);
+
+        const rect = svg.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        graphTransform.x = mouseX - (mouseX - graphTransform.x) * (newScale / graphTransform.scale);
+        graphTransform.y = mouseY - (mouseY - graphTransform.y) * (newScale / graphTransform.scale);
+        graphTransform.scale = newScale;
+        updateGraphTransform();
+      },
+      { passive: false }
+    );
+  }
+}
+
+function updateGraphTransform() {
+  const vp = document.getElementById("graph-viewport");
+  if (vp) {
+    vp.setAttribute("transform", `translate(${graphTransform.x}, ${graphTransform.y}) scale(${graphTransform.scale})`);
+  }
+}
+
+function resetGraphView() {
+  graphTransform = { x: 40, y: 40, scale: 0.85 };
+  updateGraphTransform();
+}
+
+async function openVisualGraphModal() {
+  const backdrop = document.getElementById("graph-modal-backdrop");
+  if (!backdrop) return;
+  backdrop.style.display = "flex";
+  await loadAndRenderMemoryGraph();
+}
+
+function closeVisualGraphModal() {
+  const backdrop = document.getElementById("graph-modal-backdrop");
+  if (backdrop) backdrop.style.display = "none";
+  const tooltip = document.getElementById("graph-tooltip");
+  if (tooltip) tooltip.style.display = "none";
+}
+
+async function loadAndRenderMemoryGraph() {
+  const badge = document.getElementById("graph-node-count-badge");
+  const viewport = document.getElementById("graph-viewport");
+  if (badge) badge.textContent = "Loading...";
+
+  try {
+    const res = await fetch("/api/memory/graph");
+    if (!res.ok) throw new Error("Failed to load memory graph");
+    const data = await res.json();
+    currentGraphData = data;
+
+    if (badge) {
+      badge.textContent = `${data.nodes.length} Nodes · ${data.edges.length} Supersession Edges`;
+    }
+
+    renderMemoryGraphSvg(data.nodes, data.edges);
+  } catch (err) {
+    console.error("Error loading graph:", err);
+    if (badge) badge.textContent = "Error";
+    if (viewport) {
+      viewport.innerHTML = `
+        <text x="100" y="100" fill="#ef4444" font-size="14">Error loading knowledge graph: ${escapeHtml(err.message)}</text>
+      `;
+    }
+  }
+}
+
+function renderMemoryGraphSvg(nodes, edges) {
+  const viewport = document.getElementById("graph-viewport");
+  const tooltip = document.getElementById("graph-tooltip");
+  if (!viewport) return;
+
+  viewport.innerHTML = "";
+
+  const CARD_WIDTH = 400;
+  const CARD_HEIGHT = 145;
+  const GAP_Y = 30;
+  const START_Y = 110;
+
+  const COL1_X = 60;   // Superseded / Banned
+  const COL2_X = 580;  // Active In-Force
+  const COL3_X = 1100; // Habits & Notes
+
+  // 1. Column headers
+  const headers = [
+    { x: COL1_X, title: "🚫 SUPERSEDED / BANNED DECISIONS", subtitle: "Epistemic Status: Superseded · Historical Precedents" },
+    { x: COL2_X, title: "🟢 IN-FORCE ACTIVE ARCHITECTURE DECISIONS", subtitle: "Epistemic Status: Active · AST & Linter Enforced" },
+    { x: COL3_X, title: "⚡ HABITS & REPOSITORY NOTES", subtitle: "Long-term Learned Memory & Epistemic Notes" }
+  ];
+
+  let headerSvg = "";
+  headers.forEach(h => {
+    headerSvg += `
+      <g transform="translate(${h.x}, 40)">
+        <text x="0" y="18" fill="#f8fafc" font-size="13" font-weight="700" letter-spacing="0.5">${h.title}</text>
+        <text x="0" y="38" fill="#94a3b8" font-size="11">${h.subtitle}</text>
+        <line x1="0" y1="48" x2="${CARD_WIDTH}" y2="48" stroke="rgba(255,255,255,0.12)" stroke-width="1" />
+      </g>
+    `;
+  });
+  viewport.innerHTML += headerSvg;
+
+  // 2. Separate nodes
+  const supersededNodes = nodes.filter(n => n.epistemic_status === "superseded" || n.superseded_at);
+  const activeNodes = nodes.filter(n => n.type === "architecture_decision" && n.epistemic_status !== "superseded" && !n.superseded_at);
+  const otherNodes = nodes.filter(n => n.type !== "architecture_decision");
+
+  // Map edges to find pairs: active (source) -> superseded (target)
+  const edgePairMap = new Map(); // targetId -> sourceId
+  edges.forEach(e => {
+    if (e.relation === "supersedes") {
+      edgePairMap.set(e.target, e.source);
+    }
+  });
+
+  const nodePositions = new Map(); // id -> { x, y }
+
+  // Align superseded and active nodes by pairing
+  let rowIndex = 0;
+  const processedActive = new Set();
+  const processedSuperseded = new Set();
+
+  supersededNodes.forEach(supNode => {
+    const activeSrcId = edgePairMap.get(supNode.id);
+    const activeNode = activeNodes.find(a => a.id === activeSrcId);
+
+    const y = START_Y + rowIndex * (CARD_HEIGHT + GAP_Y);
+    nodePositions.set(supNode.id, { x: COL1_X, y });
+    processedSuperseded.add(supNode.id);
+
+    if (activeNode && !processedActive.has(activeNode.id)) {
+      nodePositions.set(activeNode.id, { x: COL2_X, y });
+      processedActive.add(activeNode.id);
+    }
+    rowIndex++;
+  });
+
+  // Remaining active nodes
+  activeNodes.forEach(actNode => {
+    if (!processedActive.has(actNode.id)) {
+      const y = START_Y + rowIndex * (CARD_HEIGHT + GAP_Y);
+      nodePositions.set(actNode.id, { x: COL2_X, y });
+      processedActive.add(actNode.id);
+      rowIndex++;
+    }
+  });
+
+  // Other nodes (habits, notes)
+  let otherRowIndex = 0;
+  otherNodes.forEach(otherNode => {
+    const y = START_Y + otherRowIndex * (CARD_HEIGHT + GAP_Y);
+    nodePositions.set(otherNode.id, { x: COL3_X, y });
+    otherRowIndex++;
+  });
+
+  // 3. Render Edges (render before nodes so lines sit underneath cards)
+  let edgesSvg = '<g class="graph-edges-layer">';
+  edges.forEach((edge, idx) => {
+    const srcPos = nodePositions.get(edge.source);
+    const tgtPos = nodePositions.get(edge.target);
+
+    if (srcPos && tgtPos) {
+      const x1 = srcPos.x;
+      const y1 = srcPos.y + CARD_HEIGHT / 2;
+      const x2 = tgtPos.x + CARD_WIDTH;
+      const y2 = tgtPos.y + CARD_HEIGHT / 2;
+
+      const dx = Math.abs(x1 - x2) * 0.45;
+      const cx1 = x1 - dx;
+      const cy1 = y1;
+      const cx2 = x2 + dx;
+      const cy2 = y2;
+
+      const pathData = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+
+      edgesSvg += `
+        <g class="graph-edge-group" data-edge-idx="${idx}" data-source="${escapeHtml(edge.source)}" data-target="${escapeHtml(edge.target)}">
+          <path d="${pathData}" class="graph-edge-path" marker-end="url(#arrow-supersedes)" id="edge-${idx}" />
+          <g transform="translate(${midX}, ${midY})">
+            <rect x="-38" y="-10" width="76" height="20" rx="10" fill="#1e1014" stroke="#ef4444" stroke-width="1" />
+            <text x="0" y="3.5" class="graph-edge-label">supersedes</text>
+          </g>
+        </g>
+      `;
+    }
+  });
+  edgesSvg += '</g>';
+  viewport.innerHTML += edgesSvg;
+
+  // 4. Render Nodes
+  let nodesSvg = '<g class="graph-nodes-layer">';
+  nodes.forEach(node => {
+    const pos = nodePositions.get(node.id) || { x: COL2_X, y: START_Y };
+    const isSuperseded = node.epistemic_status === "superseded" || Boolean(node.superseded_at);
+    const isHabit = node.type === "habit";
+    const isNote = node.type === "project_state";
+
+    let borderStroke = "#22c55e";
+    let stripeColor = "#22c55e";
+    let badgeText = "🟢 IN FORCE";
+    let badgeBg = "rgba(34, 197, 94, 0.15)";
+    let badgeTextColor = "#4ade80";
+
+    if (isSuperseded) {
+      borderStroke = "#ef4444";
+      stripeColor = "#ef4444";
+      badgeText = "🚫 SUPERSEDED";
+      badgeBg = "rgba(239, 68, 68, 0.18)";
+      badgeTextColor = "#f87171";
+    } else if (isHabit) {
+      borderStroke = "#a855f7";
+      stripeColor = "#a855f7";
+      badgeText = "⚡ HABIT";
+      badgeBg = "rgba(168, 85, 247, 0.18)";
+      badgeTextColor = "#c084fc";
+    } else if (isNote) {
+      borderStroke = "#38bdf8";
+      stripeColor = "#38bdf8";
+      badgeText = "📝 NOTE";
+      badgeBg = "rgba(56, 189, 248, 0.18)";
+      badgeTextColor = "#38bdf8";
+    }
+
+    const validDate = node.valid_from ? node.valid_from.split("T")[0] : "genesis";
+    const rawLabel = (node.label || node.id);
+    const truncatedTitle = rawLabel.length > 38 ? rawLabel.slice(0, 35) + "..." : rawLabel;
+
+    let bodyContentSvg = "";
+    if (isSuperseded) {
+      const whyText = node.why_inactive || "Superseded by newer architecture decision";
+      const truncatedWhy = whyText.length > 56 ? whyText.slice(0, 53) + "..." : whyText;
+      const forbiddenTokens = (node.forbidden || []).slice(0, 3).join(", ");
+
+      bodyContentSvg = `
+        <rect x="14" y="62" width="${CARD_WIDTH - 28}" height="44" rx="5" fill="rgba(239, 68, 68, 0.08)" stroke="rgba(239, 68, 68, 0.25)" stroke-width="1" />
+        <text x="22" y="78" fill="#fca5a5" font-size="10.5" font-weight="600">Why Inactive / Superseded:</text>
+        <text x="22" y="94" fill="#fecaca" font-size="10">${escapeHtml(truncatedWhy)}</text>
+        ${forbiddenTokens ? `<text x="14" y="125" fill="#ef4444" font-size="10" font-family="monospace">🚫 Banned: ${escapeHtml(forbiddenTokens)}</text>` : ''}
+      `;
+    } else if (node.type === "architecture_decision") {
+      const reqTokens = (node.required || []).slice(0, 2).join(", ");
+      const forbTokens = (node.forbidden || []).slice(0, 2).join(", ");
+
+      bodyContentSvg = `
+        ${reqTokens ? `<text x="14" y="76" fill="#4ade80" font-size="10.5" font-family="monospace">✅ Required: ${escapeHtml(reqTokens)}</text>` : ''}
+        ${forbTokens ? `<text x="14" y="98" fill="#f87171" font-size="10.5" font-family="monospace">🚫 Forbidden: ${escapeHtml(forbTokens)}</text>` : ''}
+        <text x="14" y="125" fill="#64748b" font-size="10">AST Rule Active · Valid from: ${validDate}</text>
+      `;
+    } else {
+      const tagList = (node.tags || []).slice(0, 3).join(", ");
+      bodyContentSvg = `
+        <text x="14" y="80" fill="#94a3b8" font-size="11">Ephemeral Memory Node</text>
+        ${tagList ? `<text x="14" y="105" fill="#38bdf8" font-size="10.5" font-family="monospace">Tags: ${escapeHtml(tagList)}</text>` : ''}
+        <text x="14" y="125" fill="#64748b" font-size="10">Recorded: ${validDate}</text>
+      `;
+    }
+
+    nodesSvg += `
+      <g class="graph-node-group" data-id="${escapeHtml(node.id)}" transform="translate(${pos.x}, ${pos.y})">
+        <rect class="node-card" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="8" fill="#0b1120" stroke="${borderStroke}" stroke-width="1.5" stroke-dasharray="${isSuperseded ? '5 3' : 'none'}" />
+        <rect x="0" y="0" width="${CARD_WIDTH}" height="3" rx="1.5" fill="${stripeColor}" />
+        
+        <!-- Header -->
+        <rect x="14" y="12" width="105" height="18" rx="4" fill="${badgeBg}" />
+        <text x="20" y="25" fill="${badgeTextColor}" font-size="9.5" font-weight="700" letter-spacing="0.3">${badgeText}</text>
+        <text x="${CARD_WIDTH - 14}" y="25" text-anchor="end" fill="#94a3b8" font-size="10" font-family="monospace">${validDate}</text>
+
+        <!-- Title -->
+        <text x="14" y="47" fill="#f8fafc" font-size="12.5" font-weight="600">${escapeHtml(truncatedTitle)}</text>
+
+        <!-- Details -->
+        ${bodyContentSvg}
+
+        <!-- Click hint -->
+        <text x="${CARD_WIDTH - 14}" y="${CARD_HEIGHT - 12}" text-anchor="end" fill="#38bdf8" font-size="9.5" opacity="0.8">Click to view ADR →</text>
+      </g>
+    `;
+  });
+  nodesSvg += '</g>';
+  viewport.innerHTML += nodesSvg;
+
+  // 5. Attach event listeners to node groups
+  viewport.querySelectorAll(".graph-node-group").forEach(el => {
+    const nodeId = el.getAttribute("data-id");
+    const nodeData = nodes.find(n => n.id === nodeId);
+    if (!nodeData) return;
+
+    el.addEventListener("mouseenter", (e) => {
+      viewport.querySelectorAll(".graph-edge-group").forEach(edgeEl => {
+        const src = edgeEl.getAttribute("data-source");
+        const tgt = edgeEl.getAttribute("data-target");
+        const path = edgeEl.querySelector(".graph-edge-path");
+        if (src === nodeId || tgt === nodeId) {
+          if (path) {
+            path.style.stroke = "#f87171";
+            path.style.strokeWidth = "3.5px";
+            path.style.strokeDasharray = "none";
+          }
+        }
+      });
+
+      if (tooltip) {
+        let tooltipContent = `
+          <div class="graph-tooltip-title">${escapeHtml(nodeData.label || nodeData.id)}</div>
+          <span class="graph-tooltip-status ${nodeData.epistemic_status === 'superseded' ? 'superseded' : (nodeData.type === 'habit' ? 'habit' : (nodeData.type === 'project_state' ? 'note' : 'active'))}">
+            ${escapeHtml(nodeData.epistemic_status).toUpperCase()}
+          </span>
+          <div style="font-size: 10.5px; color: #94a3b8; margin-bottom: 6px;">
+            Valid from: ${nodeData.valid_from ? nodeData.valid_from.split('T')[0] : 'genesis'}
+            ${nodeData.superseded_at ? `<br/>Superseded at: ${nodeData.superseded_at.split('T')[0]}` : ''}
+          </div>
+        `;
+
+        if (nodeData.why_inactive) {
+          tooltipContent += `
+            <div class="graph-tooltip-why">
+              <strong>Why Superseded / Inactive:</strong><br/>
+              ${escapeHtml(nodeData.why_inactive)}
+            </div>
+          `;
+        }
+
+        if (nodeData.required && nodeData.required.length > 0) {
+          tooltipContent += `<div style="color: #4ade80; margin-top: 5px; font-family: monospace; font-size: 10px;">Required: ${escapeHtml(nodeData.required.join(', '))}</div>`;
+        }
+        if (nodeData.forbidden && nodeData.forbidden.length > 0) {
+          tooltipContent += `<div style="color: #ef4444; margin-top: 3px; font-family: monospace; font-size: 10px;">Forbidden: ${escapeHtml(nodeData.forbidden.join(', '))}</div>`;
+        }
+        if (nodeData.tags && nodeData.tags.length > 0) {
+          tooltipContent += `<div style="color: #38bdf8; margin-top: 5px; font-size: 10px;">Tags: ${escapeHtml(nodeData.tags.join(', '))}</div>`;
+        }
+
+        tooltip.innerHTML = tooltipContent;
+        tooltip.style.display = "block";
+      }
+    });
+
+    el.addEventListener("mousemove", (e) => {
+      if (tooltip && tooltip.style.display !== "none") {
+        const modalBody = document.querySelector(".graph-modal-body");
+        if (modalBody) {
+          const rect = modalBody.getBoundingClientRect();
+          let left = e.clientX - rect.left + 16;
+          let top = e.clientY - rect.top + 16;
+
+          if (left + 360 > rect.width) {
+            left = e.clientX - rect.left - 360;
+          }
+          if (top + 220 > rect.height) {
+            top = e.clientY - rect.top - 200;
+          }
+
+          tooltip.style.left = `${Math.max(10, left)}px`;
+          tooltip.style.top = `${Math.max(10, top)}px`;
+        }
+      }
+    });
+
+    el.addEventListener("mouseleave", () => {
+      viewport.querySelectorAll(".graph-edge-path").forEach(path => {
+        path.style.stroke = "";
+        path.style.strokeWidth = "";
+        path.style.strokeDasharray = "";
+      });
+      if (tooltip) tooltip.style.display = "none";
+    });
+
+    el.addEventListener("click", () => {
+      if (nodeData.id.startsWith("adr:")) {
+        openAdrModal(nodeData.id.replace("adr:", ""));
+      }
+    });
+  });
+
+  updateGraphTransform();
 }
