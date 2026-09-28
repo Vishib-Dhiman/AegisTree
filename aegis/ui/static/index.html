@@ -117,19 +117,16 @@
           <button id="btn-clear-threads" class="btn-clear-tasks-link" title="Clear all recent tasks">Clear</button>
         </div>
         <div class="threads-list" id="threads-list"></div>
+      </div>
 
-      <div class="sidebar-footer">
-        <div class="user-profile">
-          <div class="user-avatar">VD</div>
-          <div class="user-info">
-            <span class="user-name">Vishib</span>
-            <span class="user-status">100% Air-Gapped (127.0.0.1)</span>
-          </div>
-        </div>
-
+      <!-- Scenarios Dropdown Row (Positioned just above Vishib footer) -->
+      <div class="sidebar-scenarios-row">
         <div class="scenarios-dropdown-container" id="scenarios-dropdown-container">
-          <button id="btn-scenarios-dropdown" class="btn-scenarios-trigger" title="Rehearsed Pitch Scenarios">
-            <span>🎯 Scenarios</span>
+          <button id="btn-scenarios-dropdown" class="btn-scenarios-trigger full-width" title="Rehearsed Pitch Scenarios">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 14px;">🎯</span>
+              <span style="font-weight: 500;">Rehearsed Scenarios</span>
+            </div>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
           </button>
 
@@ -186,6 +183,17 @@
             <div class="scenarios-dropdown-footer">
               <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo to Original Settings (deletes recent chats & memory graph)">Reset System &amp; Memory</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom User Profile Footer (Attached to bottom) -->
+      <div class="sidebar-footer">
+        <div class="user-profile">
+          <div class="user-avatar">VD</div>
+          <div class="user-info">
+            <span class="user-name">Vishib</span>
+            <span class="user-status">100% Air-Gapped (127.0.0.1)</span>
           </div>
         </div>
       </div>

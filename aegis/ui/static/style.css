@@ -52,6 +52,8 @@ body {
 /* 1. Left Sidebar */
 .sidebar {
   width: 270px;
+  height: 100vh;
+  max-height: 100vh;
   background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
   display: flex;
@@ -59,6 +61,7 @@ body {
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), width 0.25s ease;
   z-index: 20;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .sidebar.collapsed {
@@ -320,13 +323,21 @@ body {
   font-size: 14px;
 }
 
+.sidebar-scenarios-row {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+}
+
 .sidebar-footer {
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-top: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.28);
+  flex-shrink: 0;
 }
 
 .user-profile {
@@ -392,6 +403,7 @@ body {
 /* Scenarios Dropdown Popover */
 .scenarios-dropdown-container {
   position: relative;
+  width: 100%;
 }
 
 .btn-scenarios-trigger {
@@ -410,8 +422,22 @@ body {
   white-space: nowrap;
 }
 
-.btn-scenarios-trigger:hover {
-  background: rgba(255, 255, 255, 0.1);
+.btn-scenarios-trigger.full-width {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+  font-size: 12.5px;
+}
+
+.btn-scenarios-trigger:hover,
+.btn-scenarios-trigger.full-width:hover {
+  background: rgba(255, 255, 255, 0.09);
   border-color: rgba(255, 255, 255, 0.22);
   color: #fff;
 }
@@ -420,6 +446,13 @@ body {
   background: rgba(56, 189, 248, 0.15);
   border-color: rgba(56, 189, 248, 0.4);
   color: #38bdf8;
+}
+
+.sidebar-scenarios-row .scenarios-dropdown-menu {
+  width: 100%;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
 }
 
 .scenarios-dropdown-menu {
