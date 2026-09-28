@@ -118,55 +118,6 @@
         </div>
         <div class="threads-list" id="threads-list"></div>
 
-        <div class="sidebar-section-title">Rehearsed Pitch Scenarios</div>
-        <div class="recents-list">
-          <div class="recent-item" data-prompt="persist">
-            <span class="recent-icon">🔐</span>
-            <span class="recent-text">Persist Token (ADR-014)</span>
-          </div>
-          <div class="recent-item" data-prompt="rotate">
-            <span class="recent-icon">⚡</span>
-            <span class="recent-text">Rotate Token (Habit)</span>
-          </div>
-          <div class="recent-item danger" data-prompt="force_legacy">
-            <span class="recent-icon">🛡️</span>
-            <span class="recent-text">Force Legacy (Refusal)</span>
-          </div>
-          <div class="recent-item" data-prompt="pyca_oaep">
-            <span class="recent-icon">🔑</span>
-            <span class="recent-text">PyCA RSA OAEP (ADR-021)</span>
-          </div>
-          <div class="recent-item danger" data-prompt="pyca_pkcs">
-            <span class="recent-icon">🚫</span>
-            <span class="recent-text">PyCA Force PKCS1 (Refusal)</span>
-          </div>
-          <div class="recent-item" data-prompt="pydantic_v2">
-            <span class="recent-icon">📦</span>
-            <span class="recent-text">Pydantic v2 (ADR-032)</span>
-          </div>
-          <div class="recent-item danger" data-prompt="pydantic_v1">
-            <span class="recent-icon">🚫</span>
-            <span class="recent-text">Pydantic Force .dict()</span>
-          </div>
-          <div class="recent-item" data-prompt="db_sqlalchemy">
-            <span class="recent-icon">🗄️</span>
-            <span class="recent-text">SQLAlchemy 2.0 (ADR-045)</span>
-          </div>
-          <div class="recent-item danger" data-prompt="db_engine">
-            <span class="recent-icon">🚫</span>
-            <span class="recent-text">SQL Force engine.execute</span>
-          </div>
-          <div class="recent-item" data-prompt="kyber">
-            <span class="recent-icon">⚛️</span>
-            <span class="recent-text">Migrate Kyber (Abstention)</span>
-          </div>
-          <div class="recent-item" data-prompt="explain">
-            <span class="recent-icon">📖</span>
-            <span class="recent-text">Explain Architecture</span>
-          </div>
-        </div>
-      </div>
-
       <div class="sidebar-footer">
         <div class="user-profile">
           <div class="user-avatar">VD</div>
@@ -175,7 +126,68 @@
             <span class="user-status">100% Air-Gapped (127.0.0.1)</span>
           </div>
         </div>
-        <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo to Original Settings (deletes recent chats & memory graph)">Reset</button>
+
+        <div class="scenarios-dropdown-container" id="scenarios-dropdown-container">
+          <button id="btn-scenarios-dropdown" class="btn-scenarios-trigger" title="Rehearsed Pitch Scenarios">
+            <span>🎯 Scenarios</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+
+          <div class="scenarios-dropdown-menu" id="scenarios-dropdown-menu" style="display: none;">
+            <div class="scenarios-dropdown-header">
+              <span>Rehearsed Pitch Scenarios</span>
+            </div>
+            <div class="scenarios-dropdown-list">
+              <div class="recent-item" data-prompt="persist">
+                <span class="recent-icon">🔐</span>
+                <span class="recent-text">Persist Token (ADR-014)</span>
+              </div>
+              <div class="recent-item" data-prompt="rotate">
+                <span class="recent-icon">⚡</span>
+                <span class="recent-text">Rotate Token (Habit)</span>
+              </div>
+              <div class="recent-item danger" data-prompt="force_legacy">
+                <span class="recent-icon">🛡️</span>
+                <span class="recent-text">Force Legacy (Refusal)</span>
+              </div>
+              <div class="recent-item" data-prompt="pyca_oaep">
+                <span class="recent-icon">🔑</span>
+                <span class="recent-text">PyCA RSA OAEP (ADR-021)</span>
+              </div>
+              <div class="recent-item danger" data-prompt="pyca_pkcs">
+                <span class="recent-icon">🚫</span>
+                <span class="recent-text">PyCA Force PKCS1 (Refusal)</span>
+              </div>
+              <div class="recent-item" data-prompt="pydantic_v2">
+                <span class="recent-icon">📦</span>
+                <span class="recent-text">Pydantic v2 (ADR-032)</span>
+              </div>
+              <div class="recent-item danger" data-prompt="pydantic_v1">
+                <span class="recent-icon">🚫</span>
+                <span class="recent-text">Pydantic Force .dict()</span>
+              </div>
+              <div class="recent-item" data-prompt="db_sqlalchemy">
+                <span class="recent-icon">🗄️</span>
+                <span class="recent-text">SQLAlchemy 2.0 (ADR-045)</span>
+              </div>
+              <div class="recent-item danger" data-prompt="db_engine">
+                <span class="recent-icon">🚫</span>
+                <span class="recent-text">SQL Force engine.execute</span>
+              </div>
+              <div class="recent-item" data-prompt="kyber">
+                <span class="recent-icon">⚛️</span>
+                <span class="recent-text">Migrate Kyber (Abstention)</span>
+              </div>
+              <div class="recent-item" data-prompt="explain">
+                <span class="recent-icon">📖</span>
+                <span class="recent-text">Explain Architecture</span>
+              </div>
+            </div>
+            <div class="scenarios-dropdown-footer">
+              <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo to Original Settings (deletes recent chats & memory graph)">Reset System &amp; Memory</button>
+            </div>
+          </div>
+        </div>
       </div>
     </aside>
 
