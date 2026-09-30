@@ -93,3 +93,17 @@ def test_forget_with_storage_starts_clean(tmp_path: Path):
     memory.forget(vault, delete_storage=True)
     assert vault.resolve() not in memory.roots()
     assert not [n for n in memory.get(vault).graph.all_nodes() if n.type == NodeType.HABIT]
+
+
+def _request(host: str, headers: dict):
+    from starlette.requests import Request as StarletteRequest
+    raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    return StarletteRequest({"type": "http", "client": (host, 50000), "headers": raw})
+
+
+def test_computer_access_is_local_only_even_through_a_tunnel(srv):
+    assert srv._is_local(_request("127.0.0.1", {}))
+    assert not srv._is_local(_request("192.168.0.20", {}))  # another device on the Wi-Fi
+    # cloudflared connects from 127.0.0.1 but the visitor is on the internet
+    assert not srv._is_local(_request("127.0.0.1", {"Cf-Connecting-Ip": "203.0.113.9", "Cf-Ray": "x"}))
+    assert not srv._is_local(_request("127.0.0.1", {"X-Forwarded-For": "203.0.113.9"}))

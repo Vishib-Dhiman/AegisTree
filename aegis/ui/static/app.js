@@ -1511,7 +1511,50 @@ function recordTurn(promptText, data) {
   saveThreads();
 }
 
-async function runWithPrompt(promptText, presetTitle = null, images = []) {
+// One request at a time (the server allows one per user): later clicks queue up
+let runQueue = Promise.resolve();
+let runsPending = 0;
+
+function userBubble(promptText, images = []) {
+  const userMsg = document.createElement("div");
+  userMsg.className = "message-user";
+  const thumbs = images.length
+    ? `<div class="message-user-images">${images.map(i => `<img src="${i.thumb}" alt="${escapeHtml(i.name)}" title="${escapeHtml(i.name)} · ${i.width}×${i.height}" />`).join("")}</div>`
+    : "";
+  userMsg.innerHTML = `${thumbs}<div class="message-user-content">${escapeHtml(promptText)}</div>`;
+  return userMsg;
+}
+
+function refreshQueueLabels() {
+  document.querySelectorAll("#messages-stream .message-user.queued .queued-label").forEach((label, i) => {
+    label.textContent = i === 0 ? "Queued · starts after the current request" : `Queued · ${i} ahead of it`;
+  });
+}
+
+function runWithPrompt(promptText, presetTitle = null, images = []) {
+  // Busy? Show the prompt now, greyed out and shimmering, and run it when its turn comes
+  let queued = null;
+  if (runsPending > 0) {
+    const stream = document.getElementById("messages-stream");
+    queued = userBubble(promptText, images);
+    queued.classList.add("queued");
+    const label = document.createElement("span");
+    label.className = "queued-label";
+    queued.appendChild(label);
+    stream.appendChild(queued);
+    refreshQueueLabels();
+    scrollToBottom(true);
+  }
+  runsPending += 1;
+  const run = runQueue
+    .then(() => runWithPromptNow(promptText, presetTitle, images, queued))
+    .catch((err) => console.error("Run error:", err))
+    .finally(() => { runsPending -= 1; });
+  runQueue = run;
+  return run;
+}
+
+async function runWithPromptNow(promptText, presetTitle = null, images = [], queued = null) {
   document.getElementById("hero-view").style.display = "none";
   const messagesStream = document.getElementById("messages-stream");
   messagesStream.style.display = "flex";
@@ -1534,14 +1577,18 @@ async function runWithPrompt(promptText, presetTitle = null, images = []) {
     renderThreadsList();
   }
 
-  // 1. Append User Message Bubble
-  const userMsg = document.createElement("div");
-  userMsg.className = "message-user";
-  const thumbs = images.length
-    ? `<div class="message-user-images">${images.map(i => `<img src="${i.thumb}" alt="${escapeHtml(i.name)}" title="${escapeHtml(i.name)} · ${i.width}×${i.height}" />`).join("")}</div>`
-    : "";
-  userMsg.innerHTML = `${thumbs}<div class="message-user-content">${escapeHtml(promptText)}</div>`;
-  messagesStream.appendChild(userMsg);
+  // 1. User message bubble: the queued one becomes a normal message, otherwise a new one
+  let userMsg;
+  if (queued && queued.isConnected) {
+    userMsg = queued;
+    userMsg.classList.remove("queued");
+    const label = userMsg.querySelector(".queued-label");
+    if (label) label.remove();
+    refreshQueueLabels();
+  } else {
+    userMsg = userBubble(promptText, images);
+    messagesStream.appendChild(userMsg);
+  }
 
   // 2. Live run card: steps, reasoning and output stream in as they happen
   const assistantMsg = document.createElement("div");
@@ -1588,7 +1635,7 @@ async function runWithPrompt(promptText, presetTitle = null, images = []) {
       </div>
     </div>
   `;
-  messagesStream.appendChild(assistantMsg);
+  userMsg.after(assistantMsg);
   scrollToBottom(true);
 
   document.getElementById("btn-run").disabled = true;
@@ -1752,11 +1799,12 @@ async function runWithPrompt(promptText, presetTitle = null, images = []) {
         signal: controller.signal
       });
 
-      if (res.status === 400) {
-        // Rejected input (e.g. a bad screenshot): show why instead of retrying
+      if (!res.ok) {
+        // Refused (bad screenshot, a request already running, server error): show why instead of retrying
         const err = await res.json().catch(() => ({}));
-        const rejected = new Error(err.detail || "The request was rejected.");
+        const rejected = new Error(err.detail || `The request failed (HTTP ${res.status}).`);
         rejected.rejected = true;
+        rejected.status = res.status;
         throw rejected;
       }
 
@@ -1873,7 +1921,19 @@ async function runWithPrompt(promptText, presetTitle = null, images = []) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64) })
       });
-      data = await res.json();
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const failed = new Error(body.detail || `The request failed (HTTP ${res.status}).`);
+        failed.rejected = true;
+        failed.status = res.status;
+        throw failed;
+      }
+      data = body;
+    }
+    if (!data || !data.status) {
+      const empty = new Error("The server returned no result for this request.");
+      empty.rejected = true;
+      throw empty;
     }
 
     currentRunId = data.run_id;
@@ -1896,7 +1956,9 @@ async function runWithPrompt(promptText, presetTitle = null, images = []) {
     }
   } catch (e) {
     console.error("Run error:", e);
-    assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">${e.rejected ? "Couldn't send that" : "Execution Error"}</span><span class="banner-body">${escapeHtml(e.message)}</span></div>`;
+    const title = e.status === 429 ? "Still busy" : e.rejected ? "Couldn't send that" : "Execution Error";
+    assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">${title}</span><span class="banner-body">${escapeHtml(e.message)}</span></div>`;
+    snapshotActiveThread();
   } finally {
     clearInterval(timerInterval);
     document.removeEventListener("keydown", onEsc);
@@ -2347,7 +2409,10 @@ function snapshotActiveThread() {
   if (activeThreadId) {
     const curThread = threads.find(t => t.id === activeThreadId);
     if (curThread) {
-      curThread.messagesHtml = document.getElementById("messages-stream").innerHTML;
+      // Saved threads keep finished messages only, not prompts still waiting in the queue
+      const copy = document.getElementById("messages-stream").cloneNode(true);
+      copy.querySelectorAll(".message-user.queued").forEach(el => el.remove());
+      curThread.messagesHtml = copy.innerHTML;
       saveThreads();
     }
   }

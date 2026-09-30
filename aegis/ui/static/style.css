@@ -1270,6 +1270,51 @@ kbd {
 }
 
 .message-user { flex-direction: column; align-items: flex-end; gap: 6px; }
+
+/* Queued prompt: grey with a blue shine until the current request finishes */
+.message-user.queued .message-user-content {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-muted) 20%, var(--surface));
+  color: var(--text-muted);
+  box-shadow: none;
+}
+.message-user.queued .message-user-content::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg,
+    transparent 25%,
+    color-mix(in srgb, var(--brand) 32%, transparent) 45%,
+    color-mix(in srgb, #ffffff 45%, var(--brand) 25%) 50%,
+    color-mix(in srgb, var(--brand) 32%, transparent) 55%,
+    transparent 75%);
+  transform: translateX(-100%);
+  animation: queued-shine 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes queued-shine { to { transform: translateX(100%); } }
+.queued-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.queued-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: queued-pulse 1.2s ease-in-out infinite;
+}
+@keyframes queued-pulse { 50% { opacity: 0.3; transform: scale(0.7); } }
+@media (prefers-reduced-motion: reduce) {
+  .message-user.queued .message-user-content::after,
+  .queued-label::before { animation: none; }
+}
 .message-user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 78%; }
 .message-user-images img {
   width: 120px;
@@ -1432,6 +1477,7 @@ kbd {
 }
 .diff-chunk-add-input { color: var(--code-add-text); }
 .inline-code-chunk:focus { background: var(--code-focus); }
+.inline-code-chunk:focus-visible { outline: none; box-shadow: none; border-radius: 0; }
 
 .unified-card-footer {
   display: flex;

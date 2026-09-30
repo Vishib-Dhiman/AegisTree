@@ -218,7 +218,9 @@ async def clearsky_sign_in(request: Request, call_next):
     path = request.url.path
     if request.method in UNSAFE_METHODS and path.startswith("/api/"):
         origin = request.headers.get("origin")
-        if origin and urlparse(origin).netloc != request.headers.get("host"):
+        # Behind a tunnel the public hostname arrives as X-Forwarded-Host
+        hosts = {request.headers.get("host"), request.headers.get("x-forwarded-host")} - {None}
+        if origin and urlparse(origin).netloc not in hosts:
             return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
     user = auth.user_for(request)
     request.state.user = user
@@ -396,9 +398,16 @@ def _checked_images(req: "RunRequest") -> List[str]:
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
+# Headers added by tunnels and reverse proxies (cloudflared, nginx, ...). Their
+# requests arrive from 127.0.0.1 but come from someone else's machine.
+PROXY_HEADERS = ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "x-real-ip", "forwarded")
+
+
 def _is_local(request: Optional[Request]) -> bool:
     """True when the request comes from this machine (computer access is never offered to others)."""
     if request is None or request.client is None:
+        return False
+    if any(h in request.headers for h in PROXY_HEADERS):
         return False
     return request.client.host in LOOPBACK_HOSTS
 
