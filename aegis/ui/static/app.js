@@ -164,6 +164,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initEventListeners();
   initTheme();
   initAdrWatcher();
+  initSpeech();
+  initSharedFolder();
   initUser().then(() => {
     initThreads();
     initGreeting();
@@ -281,11 +283,14 @@ function initEventListeners() {
   // Send action: text, screenshots, or both
   const sendCurrent = () => {
     const text = promptInput.value.trim();
-    if ((!text && !pendingImages.length) || btnRun.disabled) return;
+    if ((!text && !pendingImages.length && !pendingDocs.length) || btnRun.disabled) return;
     const images = pendingImages;
+    const docs = pendingDocs;
     pendingImages = [];
+    pendingDocs = [];
     renderAttachTray();
-    runWithPrompt(text || "Describe this screenshot.", null, images);
+    const fallback = docs.length ? "Summarize this document." : "Describe this screenshot.";
+    runWithPrompt(text || fallback, null, images, docs);
     promptInput.value = "";
     autoResizeTextarea(promptInput);
   };
@@ -338,6 +343,7 @@ function initEventListeners() {
           }
         }
         activeThreadId = null;
+        renderAttachTray();
         renderThreadsList();
         document.querySelectorAll(".recent-item").forEach(r => r.classList.remove("active"));
         elem.classList.add("active");
@@ -409,6 +415,7 @@ function initEventListeners() {
   // New session button
   document.getElementById("btn-new-session").addEventListener("click", () => {
     activeThreadId = null;
+    renderAttachTray();
     latestRunData = null;
     setAppMode("chat");
     renderThreadsList();
@@ -459,6 +466,79 @@ const MAX_ATTACHMENTS = 4;
 const MAX_IMAGE_EDGE = 1280;
 const KEEP_ORIGINAL_BYTES = 1.5 * 1024 * 1024;
 let pendingImages = []; // { id, name, base64, thumb, width, height }
+// PDFs: sent with the next message; their extracted text then stays with the chat
+const MAX_PDFS = 3;
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+const MAX_KEPT_DOC_CHARS = 48000;
+let pendingDocs = []; // { id, name, size, base64 }
+
+function isPdf(file) {
+  return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
+}
+
+function formatBytes(n) {
+  return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function keptDocs() {
+  const t = activeThread();
+  return t && Array.isArray(t.documents) ? t.documents : [];
+}
+
+function keepDocuments(texts) {
+  const t = activeThread();
+  if (!t || !Array.isArray(texts) || !texts.length) return;
+  const kept = (t.documents || []).filter(d => !texts.some(x => x.name === d.name));
+  kept.push(...texts.map(x => ({ name: x.name, text: x.text || "" })));
+  // Oldest documents drop out first once the chat holds more text than the model can take
+  let total = kept.reduce((n, d) => n + d.text.length, 0);
+  while (kept.length > 1 && total > MAX_KEPT_DOC_CHARS) total -= kept.shift().text.length;
+  t.documents = kept;
+  saveThreads();
+  renderAttachTray();
+}
+
+function documentsPayload(docs) {
+  return [
+    ...docs.map(d => ({ name: d.name, data: d.base64 })),
+    ...keptDocs().filter(k => !docs.some(d => d.name === k.name)).map(k => ({ name: k.name, text: k.text })),
+  ];
+}
+
+async function addPdfFiles(files) {
+  for (const file of files) {
+    if (pendingDocs.length >= MAX_PDFS) {
+      flashAttachNote(`Up to ${MAX_PDFS} PDFs per message.`);
+      break;
+    }
+    if (file.size > MAX_PDF_BYTES) {
+      flashAttachNote(`${file.name} is larger than ${formatBytes(MAX_PDF_BYTES)}.`);
+      continue;
+    }
+    try {
+      const dataUrl = await readAsDataURL(file);
+      pendingDocs.push({
+        id: "doc_" + Math.random().toString(36).slice(2, 9),
+        name: file.name || "document.pdf",
+        size: file.size,
+        base64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+      });
+    } catch (err) {
+      flashAttachNote(err.message);
+    }
+  }
+  renderAttachTray();
+  document.getElementById("prompt-input").focus();
+}
+
+// Screenshots and PDFs from the button, paste or drag-and-drop
+function addFiles(fileList) {
+  const files = Array.from(fileList || []);
+  const pdfs = files.filter(isPdf);
+  const images = files.filter(f => !isPdf(f) && f.type && f.type.startsWith("image/"));
+  if (pdfs.length) addPdfFiles(pdfs);
+  if (images.length) addImageFiles(images);
+}
 let visionAvailable = true;
 
 function readAsDataURL(file) {
@@ -549,17 +629,31 @@ async function addImageFiles(fileList) {
 function renderAttachTray() {
   const tray = document.getElementById("attach-tray");
   if (!tray) return;
-  tray.hidden = pendingImages.length === 0;
+  const kept = keptDocs().filter(k => !pendingDocs.some(d => d.name === k.name));
+  tray.hidden = !pendingImages.length && !pendingDocs.length && !kept.length;
+  const docChip = (id, name, meta, kind) => `
+    <div class="attach-chip doc ${kind}" data-${kind === "kept" ? "kept" : "doc"}="${escapeHtml(id)}" title="${escapeHtml(name)} · ${escapeHtml(meta)}">
+      <span class="doc-icon" aria-hidden="true">PDF</span>
+      <span class="doc-text"><span class="doc-name">${escapeHtml(name)}</span><span class="doc-meta">${escapeHtml(meta)}</span></span>
+      <button type="button" class="attach-remove" aria-label="Remove ${escapeHtml(name)}">&times;</button>
+    </div>`;
   tray.innerHTML = pendingImages.map(img => `
     <div class="attach-chip" data-id="${img.id}" title="${escapeHtml(img.name)} · ${img.width}×${img.height}">
       <img src="${img.thumb}" alt="${escapeHtml(img.name)}" />
       <button type="button" class="attach-remove" aria-label="Remove screenshot">&times;</button>
     </div>`).join("") +
+    pendingDocs.map(d => docChip(d.id, d.name, formatBytes(d.size), "new")).join("") +
+    kept.map(k => docChip(k.name, k.name, "in this chat", "kept")).join("") +
     (pendingImages.length ? `<span class="attach-count">${pendingImages.length}/${MAX_ATTACHMENTS} · sent to the vision model</span>` : "");
   tray.querySelectorAll(".attach-remove").forEach(btn => {
     btn.addEventListener("click", () => {
-      const id = btn.closest(".attach-chip").dataset.id;
-      pendingImages = pendingImages.filter(i => i.id !== id);
+      const chip = btn.closest(".attach-chip");
+      if (chip.dataset.id) pendingImages = pendingImages.filter(i => i.id !== chip.dataset.id);
+      if (chip.dataset.doc) pendingDocs = pendingDocs.filter(d => d.id !== chip.dataset.doc);
+      if (chip.dataset.kept !== undefined) {
+        const t = activeThread();
+        if (t) { t.documents = (t.documents || []).filter(d => d.name !== chip.dataset.kept); saveThreads(); }
+      }
       renderAttachTray();
     });
   });
@@ -583,17 +677,17 @@ function initAttachments() {
   if (btn && input) {
     btn.addEventListener("click", () => input.click());
     input.addEventListener("change", () => {
-      addImageFiles(input.files);
+      addFiles(input.files);
       input.value = "";
     });
   }
 
   // Paste a screenshot straight from the clipboard (e.g. Cmd+Shift+Ctrl+4, then Cmd+V)
   promptInput.addEventListener("paste", (e) => {
-    const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter(f => f.type.startsWith("image/"));
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter(f => isPdf(f) || f.type.startsWith("image/"));
     if (files.length) {
       e.preventDefault();
-      addImageFiles(files);
+      addFiles(files);
     }
   });
 
@@ -617,7 +711,7 @@ function initAttachments() {
       e.preventDefault();
       dragDepth = 0;
       capsule.classList.remove("dragging");
-      addImageFiles(e.dataTransfer.files);
+      addFiles(e.dataTransfer.files);
     });
   }
   // A file dropped anywhere else should not navigate away from the dashboard
@@ -625,7 +719,7 @@ function initAttachments() {
   window.addEventListener("drop", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
-    if (!capsule || !capsule.contains(e.target)) addImageFiles(e.dataTransfer.files);
+    if (!capsule || !capsule.contains(e.target)) addFiles(e.dataTransfer.files);
   });
   updateImageButton();
 }
@@ -759,6 +853,60 @@ function composerToggle(id, iconSvg, label, onClick, insertAfter) {
   return btn;
 }
 
+// "Tools" button in the composer: Web, Computer and Share folder live in a
+// flyout that opens to the right of it.
+function ensureToolsMenu(anchor) {
+  let menu = document.getElementById("tools-menu");
+  if (menu) return menu.querySelector(".tools-flyout");
+  if (!anchor) return null;
+  menu = document.createElement("div");
+  menu.id = "tools-menu";
+  menu.className = "tools-menu";
+  menu.innerHTML = `
+    <button type="button" class="input-action-btn tools-trigger" id="btn-tools" aria-haspopup="true" aria-expanded="false" title="Tools: web search, computer access, shared folder">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      <span>Tools</span>
+      <span class="tools-count" hidden></span>
+      <svg class="tools-chev" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="tools-flyout" role="group" aria-label="Tools"></div>`;
+  anchor.parentNode.insertBefore(menu, anchor.nextSibling);
+
+  const trigger = menu.querySelector(".tools-trigger");
+  const setOpen = (open) => {
+    menu.classList.toggle("open", open);
+    trigger.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOpen(!menu.classList.contains("open"));
+  });
+  document.addEventListener("click", (e) => {
+    if (menu.classList.contains("open") && !menu.contains(e.target)) setOpen(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && menu.classList.contains("open")) {
+      setOpen(false);
+      trigger.focus();
+    }
+  });
+  return menu.querySelector(".tools-flyout");
+}
+
+function updateToolsMenu(buttons) {
+  const menu = document.getElementById("tools-menu");
+  if (!menu) return;
+  const visible = buttons.filter(b => b.style.display !== "none");
+  const active = visible.filter(b => b.getAttribute("aria-pressed") === "true");
+  menu.style.display = visible.length ? "" : "none";
+  if (!visible.length) menu.classList.remove("open");
+  const trigger = menu.querySelector(".tools-trigger");
+  trigger.classList.toggle("on", active.length > 0);
+  const count = menu.querySelector(".tools-count");
+  count.hidden = active.length === 0;
+  count.textContent = `${active.length} on`;
+}
+
 function updateComposerMode() {
   const free = isFreeMode();
   const pillText = document.getElementById("policy-pill-text");
@@ -766,7 +914,8 @@ function updateComposerMode() {
 
   let btn = document.getElementById("btn-web-search");
   const pill = document.getElementById("policy-pill");
-  if (!btn && pill) {
+  const toggleAnchor = document.getElementById("btn-add-image") || pill;
+  if (!btn && toggleAnchor) {
     btn = document.createElement("button");
     btn.id = "btn-web-search";
     btn.className = "input-action-btn";
@@ -777,7 +926,7 @@ function updateComposerMode() {
       try { localStorage.setItem("clearsky_web_search", webSearchOn ? "1" : "0"); } catch (e) {}
       updateComposerMode();
     });
-    pill.parentNode.insertBefore(btn, pill.nextSibling);
+    toggleAnchor.parentNode.insertBefore(btn, toggleAnchor.nextSibling);
   }
   if (btn) {
     btn.style.display = free && webSearchAllowed ? "" : "none";
@@ -800,10 +949,10 @@ function updateComposerMode() {
       try { localStorage.setItem("clearsky_computer", computerOn ? "1" : "0"); } catch (e) {}
       updateComposerMode();
     },
-    btn || pill
+    btn || toggleAnchor
   );
   if (compBtn) {
-    compBtn.style.display = free && computerAllowed ? "" : "none";
+    compBtn.style.display = free && computerAllowed && onThisMachine ? "" : "none";
     compBtn.setAttribute("aria-pressed", computerOn ? "true" : "false");
     compBtn.classList.toggle("on", computerOn);
     compBtn.title = computerOn
@@ -812,8 +961,34 @@ function updateComposerMode() {
     compBtn.querySelector(".composer-toggle-label").textContent = computerOn ? "Computer on" : "Computer";
   }
 
+  const shareBtn = composerToggle(
+    "btn-share-folder",
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    "Share folder",
+    () => (sharedFolder ? stopSharingFolder() : pickSharedFolder()),
+    compBtn || btn || toggleAnchor
+  );
+  if (shareBtn) {
+    shareBtn.style.display = free && sharedFoldersAllowed ? "" : "none";
+    shareBtn.setAttribute("aria-pressed", sharedFolder ? "true" : "false");
+    shareBtn.classList.toggle("on", !!sharedFolder);
+    shareBtn.title = sharedFolder
+      ? `Sharing "${sharedFolder.name}" (${sharedFolder.files.size} files) from this browser, read-only. Click to stop sharing.`
+      : "Share a folder from this device: the model can list, read and search files in it (read-only)";
+    shareBtn.querySelector(".composer-toggle-label").textContent = sharedFolder
+      ? `${sharedFolder.name} · ${sharedFolder.files.size}` : "Share folder";
+  }
+
+  // Group the toggles behind one "Tools" button whose panel slides out sideways
+  const flyout = ensureToolsMenu(toggleAnchor);
+  const toolButtons = [btn, compBtn, shareBtn].filter(Boolean);
+  if (flyout) toolButtons.forEach(b => flyout.appendChild(b));
+  updateToolsMenu(toolButtons);
+
   const note = document.getElementById("input-footer-note");
-  if (note) {
+  if (note && free && sharedFolder) {
+    note.textContent = `Sharing "${sharedFolder.name}" from this browser, read-only. The model sees only the files it asks for, shown in each answer. Nothing else on this device is visible.`;
+  } else if (note) {
     note.textContent = !free
       ? "Runs entirely on this machine. No prompts, code, or telemetry reach a cloud API."
       : webSearchActive()
@@ -1515,13 +1690,16 @@ function recordTurn(promptText, data) {
 let runQueue = Promise.resolve();
 let runsPending = 0;
 
-function userBubble(promptText, images = []) {
+function userBubble(promptText, images = [], docs = []) {
   const userMsg = document.createElement("div");
   userMsg.className = "message-user";
   const thumbs = images.length
     ? `<div class="message-user-images">${images.map(i => `<img src="${i.thumb}" alt="${escapeHtml(i.name)}" title="${escapeHtml(i.name)} · ${i.width}×${i.height}" />`).join("")}</div>`
     : "";
-  userMsg.innerHTML = `${thumbs}<div class="message-user-content">${escapeHtml(promptText)}</div>`;
+  const pdfs = docs.length
+    ? `<div class="message-user-docs">${docs.map(d => `<span class="message-doc" title="${escapeHtml(d.name)}"><span class="doc-icon" aria-hidden="true">PDF</span>${escapeHtml(d.name)}</span>`).join("")}</div>`
+    : "";
+  userMsg.innerHTML = `${thumbs}${pdfs}<div class="message-user-content">${escapeHtml(promptText)}</div>`;
   return userMsg;
 }
 
@@ -1531,12 +1709,12 @@ function refreshQueueLabels() {
   });
 }
 
-function runWithPrompt(promptText, presetTitle = null, images = []) {
+function runWithPrompt(promptText, presetTitle = null, images = [], docs = []) {
   // Busy? Show the prompt now, greyed out and shimmering, and run it when its turn comes
   let queued = null;
   if (runsPending > 0) {
     const stream = document.getElementById("messages-stream");
-    queued = userBubble(promptText, images);
+    queued = userBubble(promptText, images, docs);
     queued.classList.add("queued");
     const label = document.createElement("span");
     label.className = "queued-label";
@@ -1547,14 +1725,14 @@ function runWithPrompt(promptText, presetTitle = null, images = []) {
   }
   runsPending += 1;
   const run = runQueue
-    .then(() => runWithPromptNow(promptText, presetTitle, images, queued))
+    .then(() => runWithPromptNow(promptText, presetTitle, images, queued, docs))
     .catch((err) => console.error("Run error:", err))
     .finally(() => { runsPending -= 1; });
   runQueue = run;
   return run;
 }
 
-async function runWithPromptNow(promptText, presetTitle = null, images = [], queued = null) {
+async function runWithPromptNow(promptText, presetTitle = null, images = [], queued = null, docs = []) {
   document.getElementById("hero-view").style.display = "none";
   const messagesStream = document.getElementById("messages-stream");
   messagesStream.style.display = "flex";
@@ -1586,7 +1764,7 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
     if (label) label.remove();
     refreshQueueLabels();
   } else {
-    userMsg = userBubble(promptText, images);
+    userMsg = userBubble(promptText, images, docs);
     messagesStream.appendChild(userMsg);
   }
 
@@ -1795,7 +1973,7 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
       const res = await fetch("/api/run/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64) }),
+        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64), documents: documentsPayload(docs), shared_folder: sharedFolderPayload() }),
         signal: controller.signal
       });
 
@@ -1825,7 +2003,10 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
             if (!trimmed.startsWith("data: ")) continue;
             try {
               const evt = JSON.parse(trimmed.slice(6));
-              if (evt.type === "init") {
+              if (evt.run_id) activeStreamRunId = evt.run_id;
+              if (evt.type === "client_tool") {
+                answerClientTool(evt);
+              } else if (evt.type === "init") {
                 modelName = evt.model || modelName;
                 if (evt.free) {
                   live.dataset.free = "1";
@@ -1834,6 +2015,7 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
                     evt.web_search ? "web search on" : "",
                     evt.computer === "on" ? "computer access on" : "",
                     evt.computer === "remote" ? "computer access is local-only" : "",
+                    evt.computer === "folder" ? `reading "${evt.shared_folder}" in this browser` : "",
                     evt.history_turns ? `${evt.history_turns} earlier turns` : "",
                   ].filter(Boolean).join(" · ");
                   setStep(2, "done skipped", `Checks off${extras ? ` · ${extras}` : ""}`);
@@ -1919,7 +2101,7 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64) })
+        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64), documents: documentsPayload(docs), shared_folder: sharedFolderPayload() })
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1948,7 +2130,16 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
 
     // Render response into assistantMsg
     renderAssistantResponse(assistantMsg, data, promptText);
-    recordTurn(images.length ? `[${images.length} screenshot${images.length === 1 ? "" : "s"} attached] ${promptText}` : promptText, data);
+    keepDocuments(data.document_texts);
+    if (docs.length && !(data.documents || []).length) {
+      // An older server ignores the documents field: say so rather than let the model guess
+      showToast("PDF not read", "The server didn't process the attached PDF. Restart it so it runs the latest version, then attach it again.");
+    }
+    const attachedNote = [
+      images.length ? `${images.length} screenshot${images.length === 1 ? "" : "s"}` : "",
+      ...docs.map(d => d.name),
+    ].filter(Boolean).join(", ");
+    recordTurn(attachedNote ? `[Attached: ${attachedNote}] ${promptText}` : promptText, data);
 
     if (currentAppMode === "diff") {
       const diffView = document.getElementById("diff-inspector-view");
@@ -2331,6 +2522,7 @@ function clearRecentTasks() {
   threads = [];
   localStorage.removeItem(THREADS_KEY);
   activeThreadId = null;
+  renderAttachTray();
   latestRunData = null;
   currentRunId = null;
   renderThreadsList();
@@ -2360,6 +2552,7 @@ async function resetDemo() {
     threads = [];
     localStorage.removeItem(THREADS_KEY);
     activeThreadId = null;
+    renderAttachTray();
     latestRunData = null;
     currentRunId = null;
 
@@ -2501,6 +2694,8 @@ function loadThread(threadId) {
   if (!target) return;
 
   activeThreadId = threadId;
+
+  renderAttachTray();
   currentRunId = target.runId || null;
   if (target.runData) {
     latestRunData = target.runData;
@@ -3329,3 +3524,332 @@ function renderMemoryGraphSvg(nodes, edges) {
 
   updateGraphTransform();
 }
+
+// ---- Mic: speak a prompt; it is transcribed on this machine (Whisper), never by a cloud service ----
+function initSpeech() {
+  const btn = document.getElementById("btn-mic");
+  const timer = document.getElementById("mic-timer");
+  const promptInput = document.getElementById("prompt-input");
+  if (!btn || !promptInput) return;
+
+  const MAX_SECONDS = 120;
+  let state = "idle"; // idle | recording | transcribing
+  let recorder = null, stream = null, chunks = [], started = 0, ticker = null, cancelled = false;
+  let unavailable = null; // reason, when the server can't transcribe
+
+  fetch("/api/health").then(r => r.ok ? r.json() : null).then(h => {
+    if (h && h.speech && !h.speech.available) {
+      unavailable = h.speech.reason;
+      btn.classList.add("unavailable");
+      btn.title = unavailable;
+    }
+  }).catch(() => {});
+
+  const setState = (next) => {
+    state = next;
+    btn.classList.toggle("recording", next === "recording");
+    btn.classList.toggle("transcribing", next === "transcribing");
+    btn.setAttribute("aria-pressed", next === "recording" ? "true" : "false");
+    btn.title = next === "recording" ? "Stop and transcribe (Esc cancels)"
+      : next === "transcribing" ? "Transcribing…"
+      : (unavailable || "Speak your prompt (transcribed on this machine)");
+    timer.hidden = next !== "recording";
+  };
+
+  const releaseMic = () => {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    clearInterval(ticker);
+  };
+
+  const pickType = () => ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"]
+    .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || "";
+
+  async function start() {
+    if (unavailable) { showToast("Voice input unavailable", escapeHtml(unavailable)); return; }
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      showToast("Microphone unavailable", "Voice input needs HTTPS (or this machine's own address) and a browser that can record audio.");
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      showToast("Microphone blocked", "Allow microphone access for this site in your browser, then try again.");
+      return;
+    }
+    const type = pickType();
+    recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    chunks = [];
+    cancelled = false;
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => { releaseMic(); if (!cancelled) transcribe(new Blob(chunks, { type: recorder.mimeType || type || "audio/webm" })); else setState("idle"); };
+    recorder.start();
+    started = Date.now();
+    timer.textContent = "0:00";
+    ticker = setInterval(() => {
+      const s = Math.floor((Date.now() - started) / 1000);
+      timer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      if (s >= MAX_SECONDS) stop();
+    }, 250);
+    setState("recording");
+  }
+
+  function stop() {
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }
+
+  function cancel() {
+    cancelled = true;
+    stop();
+  }
+
+  async function transcribe(blob) {
+    if (!blob.size) { setState("idle"); return; }
+    setState("transcribing");
+    try {
+      const res = await fetch("/api/transcribe", { method: "POST", headers: { "Content-Type": blob.type || "audio/webm" }, body: blob });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `Transcription failed (HTTP ${res.status}).`);
+      const text = (data.text || "").trim();
+      if (!text) {
+        showToast("Didn't catch that", "No speech was detected. Try again a little closer to the mic.");
+      } else {
+        const current = promptInput.value;
+        promptInput.value = current && !/\s$/.test(current) ? `${current} ${text}` : current + text;
+        autoResizeTextarea(promptInput);
+        promptInput.focus();
+        promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+      }
+    } catch (err) {
+      showToast("Voice input failed", escapeHtml(err.message));
+    } finally {
+      setState("idle");
+    }
+  }
+
+  btn.addEventListener("click", () => {
+    if (state === "idle") start();
+    else if (state === "recording") stop();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state === "recording") { e.preventDefault(); cancel(); }
+  });
+  setState("idle");
+}
+
+// ---- Shared folder: the model reads files on this device, through this browser ----
+// The model runs on the ClearSky host; when it calls a file tool, the server sends the
+// call here, we run it against the folder the user picked, and post the result back.
+let sharedFolder = null; // { name, files: Map(path -> {handle|file, size}), dirs: Map(path -> Set(child)) }
+let sharedFoldersAllowed = true;
+let onThisMachine = false;
+let activeStreamRunId = null;
+let folderRules = { denied_name_patterns: [], denied_dir_names: [], skipped_dir_names: [], limits: {} };
+let folderDenied = [];
+
+function limit(name, fallback) {
+  return (folderRules.limits && folderRules.limits[name]) || fallback;
+}
+
+function initSharedFolder() {
+  fetch("/api/health").then(r => (r.ok ? r.json() : null)).then(h => {
+    if (!h) return;
+    // Older servers don't report this; the server enforces local-only access either way
+    onThisMachine = h.this_machine !== false;
+    sharedFoldersAllowed = h.shared_folders_allowed !== false && !!(window.showDirectoryPicker || "webkitdirectory" in document.createElement("input"));
+    if (h.shared_folder_rules) {
+      folderRules = h.shared_folder_rules;
+      folderDenied = (folderRules.denied_name_patterns || []).map(p => { try { return new RegExp(p, "i"); } catch (e) { return null; } }).filter(Boolean);
+    }
+    updateComposerMode();
+  }).catch(() => {});
+  const input = document.getElementById("folder-input");
+  if (input) {
+    input.addEventListener("change", () => {
+      if (input.files && input.files.length) indexFromFileList(input.files);
+      input.value = "";
+    });
+  }
+}
+
+function sharedFolderPayload() {
+  return isFreeMode() && sharedFolder ? { name: sharedFolder.name, files: sharedFolder.files.size } : null;
+}
+
+function isDeniedName(name) {
+  return folderDenied.some(re => re.test(name));
+}
+
+function isSkippedDir(name) {
+  return (folderRules.denied_dir_names || []).includes(name) || (folderRules.skipped_dir_names || []).includes(name);
+}
+
+function newFolderIndex(name) {
+  return { name, files: new Map(), dirs: new Map([["", new Set()]]), capped: false };
+}
+
+function addToIndex(index, relPath, entry) {
+  if (index.files.size >= limit("max_indexed_files", 5000)) { index.capped = true; return; }
+  const parts = relPath.split("/");
+  if (parts.slice(0, -1).some(isSkippedDir) || isDeniedName(parts[parts.length - 1])) return;
+  index.files.set(relPath, entry);
+  for (let i = 0; i < parts.length; i++) {
+    const dir = parts.slice(0, i).join("/");
+    if (!index.dirs.has(dir)) index.dirs.set(dir, new Set());
+    index.dirs.get(dir).add(i === parts.length - 1 ? parts[i] : parts[i] + "/");
+  }
+}
+
+async function pickSharedFolder() {
+  if (window.showDirectoryPicker) {
+    try {
+      const dir = await window.showDirectoryPicker({ mode: "read" });
+      const index = newFolderIndex(dir.name);
+      const walk = async (handle, prefix) => {
+        for await (const [name, child] of handle.entries()) {
+          if (index.capped) return;
+          const rel = prefix ? `${prefix}/${name}` : name;
+          if (child.kind === "directory") {
+            if (!isSkippedDir(name)) await walk(child, rel);
+          } else {
+            addToIndex(index, rel, { handle: child });
+          }
+        }
+      };
+      await walk(dir, "");
+      finishSharing(index);
+    } catch (err) {
+      if (err && err.name !== "AbortError") showToast("Couldn't share that folder", escapeHtml(err.message || String(err)));
+    }
+  } else {
+    document.getElementById("folder-input").click();
+  }
+}
+
+function indexFromFileList(fileList) {
+  const files = Array.from(fileList);
+  const root = (files[0].webkitRelativePath || files[0].name).split("/")[0];
+  const index = newFolderIndex(root);
+  for (const file of files) {
+    const rel = (file.webkitRelativePath || file.name).split("/").slice(1).join("/") || file.name;
+    addToIndex(index, rel, { file });
+    if (index.capped) break;
+  }
+  finishSharing(index);
+}
+
+function finishSharing(index) {
+  sharedFolder = index;
+  updateComposerMode();
+  const note = index.capped ? ` Only the first ${limit("max_indexed_files", 5000)} files are available.` : "";
+  showToast(`Sharing "${escapeHtml(index.name)}"`, `${index.files.size} files, read-only. The model can list, read and search them while this tab is open.${note}`);
+}
+
+function stopSharingFolder() {
+  const name = sharedFolder ? sharedFolder.name : "";
+  sharedFolder = null;
+  updateComposerMode();
+  if (name) showToast("Stopped sharing", `The model can no longer read "${escapeHtml(name)}".`);
+}
+
+function cleanPath(path) {
+  const parts = String(path || "").replace(/\\/g, "/").split("/").filter(p => p && p !== ".");
+  if (parts.includes("..")) throw new Error("paths must stay inside the shared folder");
+  return parts.join("/");
+}
+
+async function entryFile(entry) {
+  return entry.file || entry.handle.getFile();
+}
+
+function stamp(ms) {
+  const d = new Date(ms);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function readText(file, maxBytes) {
+  const buf = new Uint8Array(await file.slice(0, maxBytes + 1).arrayBuffer());
+  if (buf.slice(0, 2048).includes(0)) return null; // binary
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(buf.slice(0, maxBytes));
+  return buf.length > maxBytes ? `${text}\n... (truncated at ${maxBytes} bytes)` : text;
+}
+
+const folderTools = {
+  async list_dir(args) {
+    const dir = cleanPath(args.path);
+    const children = sharedFolder.dirs.get(dir);
+    if (!children) return { ok: false, error: dir ? `no folder "${dir}" in the shared folder` : "the shared folder is empty" };
+    const rows = [];
+    for (const name of children) {
+      if (name.endsWith("/")) { rows.push({ t: 0, line: `${"(folder)".padEnd(16)}  ${name}` }); continue; }
+      const file = await entryFile(sharedFolder.files.get(dir ? `${dir}/${name}` : name));
+      rows.push({ t: file.lastModified, line: `${stamp(file.lastModified)}  ${name}` });
+    }
+    rows.sort((a, b) => b.t - a.t);
+    const max = limit("max_dir_entries", 200);
+    let out = rows.slice(0, max).map(r => r.line).join("\n");
+    if (rows.length > max) out += `\n... (${rows.length - max} more)`;
+    return { ok: true, output: out || "(empty)" };
+  },
+  async read_file(args) {
+    const path = cleanPath(args.path);
+    const name = path.split("/").pop();
+    if (isDeniedName(name)) return { ok: false, error: "denied: credential files are never shared" };
+    const entry = sharedFolder.files.get(path);
+    if (!entry) return { ok: false, error: sharedFolder.dirs.has(path) ? "that's a folder (use list_dir)" : `no file "${path}" in the shared folder` };
+    const text = await readText(await entryFile(entry), limit("max_file_bytes", 12000));
+    return text === null ? { ok: false, error: "binary file; cannot show as text" } : { ok: true, output: text };
+  },
+  async find_files(args) {
+    const q = String(args.query || args.name || "").toLowerCase().trim();
+    if (!q) return { ok: false, error: "give a query, e.g. {\"query\": \"readme\"}" };
+    const hits = [...sharedFolder.files.keys()].filter(p => p.toLowerCase().includes(q));
+    const max = limit("max_matches", 50);
+    return { ok: true, output: hits.length ? hits.slice(0, max).join("\n") + (hits.length > max ? `\n... (${hits.length - max} more)` : "") : "(no matching files)" };
+  },
+  async search_text(args) {
+    const q = String(args.query || args.text || "").toLowerCase().trim();
+    if (!q) return { ok: false, error: "give a query, e.g. {\"query\": \"TODO\"}" };
+    const maxMatches = limit("max_matches", 50), maxFiles = limit("max_search_files", 400), maxBytes = limit("max_search_file_bytes", 1000000);
+    const matches = [];
+    let scanned = 0;
+    for (const [path, entry] of sharedFolder.files) {
+      if (matches.length >= maxMatches || scanned >= maxFiles) break;
+      const file = await entryFile(entry);
+      if (file.size > maxBytes) continue;
+      const text = await readText(file, maxBytes);
+      if (text === null) continue;
+      scanned++;
+      text.split("\n").forEach((line, i) => {
+        if (matches.length < maxMatches && line.toLowerCase().includes(q)) matches.push(`${path}:${i + 1}: ${line.trim().slice(0, 200)}`);
+      });
+    }
+    const note = scanned >= maxFiles ? `\n(searched the first ${maxFiles} text files)` : "";
+    return { ok: true, output: (matches.join("\n") || "(no matches)") + note };
+  },
+};
+
+async function answerClientTool(evt) {
+  const runId = activeStreamRunId;
+  let result;
+  try {
+    if (!sharedFolder) result = { ok: false, error: "the user stopped sharing the folder" };
+    else if (!folderTools[evt.name]) result = { ok: false, error: `unknown tool "${evt.name}"` };
+    else result = await folderTools[evt.name](evt.args || {});
+  } catch (err) {
+    result = { ok: false, error: err.message || String(err) };
+  }
+  const maxChars = limit("max_output_chars", 6000);
+  if (result.output && result.output.length > maxChars) result.output = result.output.slice(0, maxChars) + "\n... (truncated)";
+  try {
+    await fetch(`/api/run/${encodeURIComponent(runId)}/tool/${encodeURIComponent(evt.id)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ok: !!result.ok, output: result.output || "", error: result.error || "" }),
+    });
+  } catch (err) {
+    console.warn("Couldn't send the folder tool result", err);
+  }
+}
+

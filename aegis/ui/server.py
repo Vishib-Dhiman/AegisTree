@@ -9,13 +9,14 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,7 +34,7 @@ from aegis.system1.router import Router, scoped_exclusions
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
 from aegis.system2.websearch import SearchOutcome, WebSearcher, format_for_prompt
 from aegis.system2.computer import MAX_TOOL_ROUNDS, computer_system_prompt, parse_tool_call, run_tool
-from aegis.system2.images import normalize_images, screenshot_note
+from aegis.system2.images import MAX_IMAGES, normalize_images, screenshot_note
 from clearsky.auth import (
     Auth,
     AuthStore,
@@ -45,6 +46,9 @@ from clearsky.auth import (
     load_or_create_secret,
 )
 from clearsky.auth.routes import public_user
+from clearsky.documents import MAX_DOCUMENTS, format_documents, parse_pdf, text_document
+from clearsky.shared_folder import ClientToolBridge, client_rules, normalize_call, shared_folder_system_prompt
+from clearsky.speech import MAX_AUDIO_BYTES, SpeechError, SpeechToText
 from clearsky.workspace_memory import WorkspaceMemory
 from aegis.system2.prompt import (
     compile_baseline,
@@ -87,6 +91,10 @@ storage_dir.mkdir(parents=True, exist_ok=True)
 memory = WorkspaceMemory(storage_dir / "workspaces", config, legacy_storage=storage_dir)
 memory.get(DEFAULT_WORKSPACE)
 generator = MockGenerator(config=config) if config.system2_provider == "mock" else OllamaGenerator(config=config)
+# Mic button: recordings are transcribed on this machine (the model loads on first use)
+speech = SpeechToText(model_size=config.speech_model)
+# Shared folders: tool calls handed to the user's browser and answered via /api/run/{run}/tool/{id}
+folder_bridge = ClientToolBridge()
 
 # ---- Multi-user: email one-time-code sign-in ----
 auth_store = AuthStore(storage_dir / "auth.sqlite")
@@ -259,6 +267,25 @@ class RunRequest(BaseModel):
     computer: bool = False
     # Screenshots for this turn, base64 or data URLs (validated by normalize_images)
     images: List[str] = []
+    # PDFs: new uploads carry base64 `data`; ones attached earlier in the chat carry their `text`
+    documents: List["DocumentIn"] = []
+    # A folder the user shared from their own browser: only its name and size come here;
+    # the model's file tools run in that browser (see clearsky.shared_folder)
+    shared_folder: Optional["SharedFolderIn"] = None
+
+
+class SharedFolderIn(BaseModel):
+    name: str
+    files: int = 0
+
+
+class DocumentIn(BaseModel):
+    name: str = "document.pdf"
+    data: Optional[str] = None
+    text: Optional[str] = None
+
+
+RunRequest.model_rebuild()
 
 
 class ApproveRequest(BaseModel):
@@ -267,7 +294,7 @@ class ApproveRequest(BaseModel):
 
 
 @app.get("/api/health")
-def get_health() -> Dict[str, Any]:
+def get_health(request: Request) -> Dict[str, Any]:
     verdict_loaded = False
     verdict_error: Optional[str] = None
     if memory.engine is not None:
@@ -290,10 +317,54 @@ def get_health() -> Dict[str, Any]:
         "installed_models": installed_models,
         "offline_env": True,
         "web_search_allowed": config_manager.config.allow_web_search,
+        "speech": speech.status(),
+        "shared_folders_allowed": config_manager.config.allow_shared_folders,
+        # Whether this browser is on the host itself (only then does "Computer" mean this Mac)
+        "this_machine": _is_local(request),
+        "shared_folder_rules": client_rules(),
         "computer_access_allowed": config_manager.config.allow_computer_access,
         "vision_model": config_manager.config.vision_model,
         "vision_available": _vision_available(),
     }
+
+
+AUDIO_TYPES = ("audio/", "video/webm", "video/mp4", "application/octet-stream")
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request) -> Dict[str, Any]:
+    """Speech to text for the mic button. The body is the raw recording (WebM, MP4, WAV...)."""
+    _current_user(request)
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith(AUDIO_TYPES):
+        raise HTTPException(status_code=415, detail="Send the recording as audio (e.g. audio/webm).")
+    if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="That recording is too long. Keep voice prompts under a few minutes.")
+    audio = await request.body()
+    status = speech.status()
+    if not status["available"]:
+        raise HTTPException(status_code=503, detail=status["reason"])
+    try:
+        return await run_in_threadpool(speech.transcribe, audio, request.query_params.get("language"))
+    except SpeechError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class ToolAnswer(BaseModel):
+    ok: bool
+    output: str = ""
+    error: str = ""
+
+
+@app.post("/api/run/{run_id}/tool/{tool_id}")
+def answer_tool_call(run_id: str, tool_id: str, answer: ToolAnswer, request: Request) -> Dict[str, Any]:
+    """A shared-folder tool result from the browser of the user who started the run."""
+    outcome = folder_bridge.deliver(run_id, tool_id, _current_user(request)["id"], answer.model_dump())
+    if outcome == "forbidden":
+        raise HTTPException(status_code=403, detail="That tool call belongs to someone else's run.")
+    if outcome == "unknown":
+        raise HTTPException(status_code=404, detail="That tool call is no longer waiting for an answer.")
+    return {"status": "ok"}
 
 
 class SetModelRequest(BaseModel):
@@ -395,6 +466,40 @@ def _checked_images(req: "RunRequest") -> List[str]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@dataclass
+class Attachments:
+    """Attached PDFs for one turn: the prompt block, what to show, what the chat keeps."""
+    block: Optional[str] = None
+    info: List[Dict[str, Any]] = field(default_factory=list)
+    texts: List[Dict[str, str]] = field(default_factory=list)
+
+
+def _checked_documents(req: "RunRequest", images: List[str]):
+    """(Attachments, images): PDF text for the prompt; scanned pages join the screenshots."""
+    new = [d for d in req.documents if d.data]
+    if len(new) > MAX_DOCUMENTS:
+        raise HTTPException(status_code=400, detail=f"Attach up to {MAX_DOCUMENTS} PDFs per message.")
+    if len(req.documents) > 2 * MAX_DOCUMENTS:
+        raise HTTPException(status_code=400, detail="Too many documents in this chat; remove some and try again.")
+    if not req.documents:
+        return Attachments(), images
+    render_scans = bool(new) and _vision_available()  # scans need the vision model to be read
+    docs, attachments = [], Attachments()
+    for item in req.documents:
+        try:
+            doc = parse_pdf(item.name, item.data, render_scans=render_scans) if item.data else text_document(item.name, item.text or "")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        docs.append(doc)
+        attachments.info.append({**doc.summary(), "new": bool(item.data)})
+        if item.data:
+            attachments.texts.append({"name": doc.name, "text": doc.text})
+    attachments.block = format_documents(docs)
+    room = max(0, MAX_IMAGES - len(images))
+    scans = [img for doc in docs for img in doc.images][:room]
+    return attachments, images + scans
+
+
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
@@ -424,6 +529,10 @@ def _free_stream(
     computer: bool = False,
     local: bool = False,
     images: Optional[List[str]] = None,
+    attachments: Optional["Attachments"] = None,
+    shared_folder: Optional["SharedFolderIn"] = None,
+    owner: Optional[int] = None,
+    streaming: bool = True,
 ):
     """No-workspace generation, yielding the same SSE event types as a governed run.
 
@@ -436,14 +545,23 @@ def _free_stream(
     turns = len(build_free_messages(prompt, history_dicts)) - 2
 
     computer_status = "off"
-    if computer:
+    if shared_folder is not None:
+        # The user's own folder, read by their browser; the host's files are not involved
+        if not config_manager.config.allow_shared_folders:
+            computer_status = "folder-disabled"
+        elif not streaming or owner is None:
+            computer_status = "folder-unavailable"
+        else:
+            computer_status = "folder"
+    elif computer:
         if not config_manager.config.allow_computer_access:
             computer_status = "disabled"
         elif not local:
             computer_status = "remote"
         else:
             computer_status = "on"
-    computer_on = computer_status == "on"
+    computer_on = computer_status in ("on", "folder")
+    folder_mode = computer_status == "folder"
     images = images or []
     turn_gen, turn_model, vision_routed = _generator_for(images)
 
@@ -451,6 +569,8 @@ def _free_stream(
         "type": "init", "run_id": run_id, "status": "free", "free": True, "history_turns": turns,
         "web_search": web_search, "computer": computer_status, "model": turn_model,
         "images": len(images), "vision_routed": vision_routed,
+        "documents": (attachments or Attachments()).info,
+        "shared_folder": shared_folder.name if folder_mode else None,
     })
 
     web: Dict[str, Any] = {"requested": web_search}
@@ -462,8 +582,14 @@ def _free_stream(
         web_context = format_for_prompt(outcome)
         yield _sse({"type": "search", "status": outcome.status, "provider": outcome.provider, "count": len(outcome.results)})
 
-    extra = computer_system_prompt() if computer_on else None
+    if folder_mode:
+        extra = shared_folder_system_prompt(shared_folder.name, shared_folder.files)
+    else:
+        extra = computer_system_prompt() if computer_on else None
     messages = build_free_messages(prompt, history_dicts, web_context, extra)
+    attachments = attachments or Attachments()
+    if attachments.block:
+        messages[-1]["content"] = f"{attachments.block}\n\nUSER REQUEST:\n{prompt}"
     if images:
         messages[-1]["images"] = images
     text, thinking, error = "", "", False
@@ -498,8 +624,16 @@ def _free_stream(
                 text = round_text
                 break
             tool_id = f"t{round_idx + 1}"
+            if folder_mode:
+                call = normalize_call(call)
             yield _sse({"type": "tool", "id": tool_id, "status": "running", "name": call["name"], "args": call.get("args") or {}})
-            result = run_tool(call)
+            if folder_mode:
+                # Registered first so a quick answer from the browser can't be missed
+                folder_bridge.open(run_id, tool_id, owner, call)
+                yield _sse({"type": "client_tool", "id": tool_id, "name": call["name"], "args": call["args"]})
+                result = folder_bridge.wait(run_id, tool_id)
+            else:
+                result = run_tool(call)
             record = {"id": tool_id, **result.to_dict()}
             tools.append(record)
             yield _sse({"type": "tool", "status": "done", **record})
@@ -517,10 +651,13 @@ def _free_stream(
     payload = _free_payload(run_id, text, thinking, (time.perf_counter() - t0) * 1000.0, error)
     payload["model"] = turn_model
     payload["images"] = len(images)
+    payload["documents"] = attachments.info
+    payload["document_texts"] = attachments.texts
     payload["vision_routed"] = vision_routed
     payload["history_turns"] = turns
     payload["web"] = web
-    payload["computer"] = {"status": computer_status, "tools": tools}
+    payload["computer"] = {"status": computer_status, "tools": tools,
+                           "shared_folder": shared_folder.name if folder_mode else None}
     if tools:
         payload["tool_log"] = [{"tool": t["name"], "status": "ok" if t["ok"] else "error"} for t in tools] + payload["tool_log"]
     yield _sse(payload)
@@ -543,11 +680,13 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
     run_id = str(uuid.uuid4())
     tool_log = []
     images = _checked_images(req)
+    attachments, images = _checked_documents(req, images)
 
     if free_mode:
         # Same path as streaming, collected into one response
         payload: Dict[str, Any] = {}
-        for event in _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images):
+        for event in _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images,
+                                  attachments, shared_folder=req.shared_folder, owner=owner, streaming=False):
             evt = json.loads(event[len("data: "):])
             if evt.get("type") == "finished":
                 payload = evt
@@ -707,6 +846,8 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
 
     # Ready: compile leaf and baseline
     leaf_text = compile_leaf(route, graph, prompt, workspace_root=workspace_root)
+    if attachments.block:
+        leaf_text = f"{leaf_text}\n\n{attachments.block}"
     baseline_text = compile_baseline(prompt, workspace_root=workspace_root)
 
     leaf_tokens = estimate_tokens(leaf_text)
@@ -862,6 +1003,8 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
         "tool_log": tool_log,
         "abstain_reason": None,
         "draft_adr": None,
+        "documents": attachments.info,
+        "document_texts": attachments.texts,
     }
 
 
@@ -870,6 +1013,7 @@ def run_prompt_stream(req: RunRequest, request: Request):
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
     images = _checked_images(req)
+    attachments, images = _checked_documents(req, images)
     owner = _current_user(request)["id"]
     workspace_root, graph, router, free_mode = _bind(request)
     _claim_run(owner)
@@ -877,7 +1021,8 @@ def run_prompt_stream(req: RunRequest, request: Request):
     if free_mode:
         return StreamingResponse(
             _released_after(
-                _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images),
+                _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images,
+                             attachments, shared_folder=req.shared_folder, owner=owner),
                 owner,
             ),
             media_type="text/event-stream",
@@ -1048,6 +1193,8 @@ def run_prompt_stream(req: RunRequest, request: Request):
             return
 
         leaf_text = compile_leaf(route, graph, prompt, workspace_root=workspace_root)
+        if attachments.block:
+            leaf_text = f"{leaf_text}\n\n{attachments.block}"
         baseline_text = compile_baseline(prompt, workspace_root=workspace_root)
 
         leaf_tokens = estimate_tokens(leaf_text)
@@ -1086,6 +1233,7 @@ def run_prompt_stream(req: RunRequest, request: Request):
             "model": turn_model,
             "images": len(images),
             "vision_routed": vision_routed,
+            "documents": attachments.info,
             "verdict": {
                 "loaded": route.verdict_error is None,
                 "selected_id": route.verdict_task_id,
@@ -1222,6 +1370,8 @@ def run_prompt_stream(req: RunRequest, request: Request):
             "tool_log": tool_log,
             "abstain_reason": None,
             "draft_adr": None,
+            "documents": attachments.info,
+            "document_texts": attachments.texts,
         }
         yield f"data: {json.dumps(full_payload, default=str)}\n\n"
 

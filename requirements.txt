@@ -126,3 +126,7 @@ widgetsnbextension==4.0.16
 xxhash==4.0.1
 yarl==1.25.1
 zipp==4.1.0
+pypdfium2==5.13.0
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+av==19.0.0

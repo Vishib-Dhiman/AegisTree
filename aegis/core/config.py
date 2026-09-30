@@ -87,6 +87,10 @@ class SystemConfig(BaseModel):
     allowed_workspace_roots: List[str] = []
     # Set by `demo.sh --lan`: marks session cookies Secure (HTTPS only)
     https: bool = False
+    # Local speech-to-text model for the mic button: tiny | base | small
+    speech_model: str = "base"
+    # Let signed-in users share a folder from their own browser with the model (read-only)
+    allow_shared_folders: bool = True
 
 
 class ConfigManager:

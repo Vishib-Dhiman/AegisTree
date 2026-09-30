@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.1">
+  <link rel="stylesheet" href="style.css?v=4.5">
 </head>
 <body>
 
@@ -232,17 +232,24 @@
                 <span id="workspace-label">demo_vault</span>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
-              <button class="input-action-btn icon-only" id="btn-add-image" type="button" title="Attach screenshots (or paste / drop them)" aria-label="Attach screenshots">
+              <button class="input-action-btn icon-only" id="btn-add-image" type="button" title="Attach screenshots or PDFs (or paste / drop them)" aria-label="Attach screenshots or PDFs">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/></svg>
               </button>
-              <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+              <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf" multiple hidden />
+              <input type="file" id="folder-input" webkitdirectory multiple hidden />
+            </div>
+
+            <div class="toolbar-right">
               <div class="toolbar-pill" id="policy-pill">
                 <span class="sparkle-mini">✦</span>
                 <span id="policy-pill-text">Policy gate on</span>
               </div>
-            </div>
-
-            <div class="toolbar-right">
+              <span class="mic-timer" id="mic-timer" hidden>0:00</span>
+              <button id="btn-mic" class="mic-btn" type="button" title="Speak your prompt (transcribed on this machine)" aria-label="Speak your prompt">
+                <svg class="mic-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+                <svg class="mic-stop" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>
+                <span class="mic-spinner" aria-hidden="true"></span>
+              </button>
               <button id="btn-run" class="send-btn" title="Send (Enter)" aria-label="Send">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
               </button>
@@ -466,6 +473,6 @@
 
   </div>
 
-  <script src="app.js?v=4.2"></script>
+  <script src="app.js?v=4.9"></script>
 </body>
 </html>
