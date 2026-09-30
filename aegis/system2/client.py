@@ -5,6 +5,7 @@ Implements strictly air-gapped Ollama communication with loopback validation and
 from __future__ import annotations
 import re
 import time
+from datetime import datetime, timezone
 from typing import Literal, Optional, Protocol
 from urllib.parse import urlparse
 import httpx

@@ -305,7 +305,8 @@ class MemoryGraph:
                             active_key = "timeout_s"
                         elif "key_id=" in active.label:
                             active_key = "key_id"
-                    if active_key == key and active.id != habit_id:
+                    same_workspace = active.metadata.get("workspace") == meta.get("workspace")
+                    if active_key == key and same_workspace and active.id != habit_id:
                         active.superseded_at = now
                         active.epistemic_status = EpistemicStatus.SUPERSEDED
                         self.upsert_node(active)

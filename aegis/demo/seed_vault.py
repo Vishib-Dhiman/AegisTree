@@ -77,3 +77,24 @@ def write_all(base_dir: Union[str, Path] = ".") -> None:
     write(base / "demo_vault", clean_extra=True, repo_key="demo_vault")
     sync_real_repos(base)
 
+
+def write_missing(base_dir: Union[str, Path] = ".") -> None:
+    """Create seed files that do not exist yet; never delete or overwrite.
+
+    Used at server start so a fresh checkout works while ADRs written or
+    edited during a session (and approved patches) survive a restart.
+    Full resets go through write_all.
+    """
+    base = Path(base_dir)
+    targets = [(base / "demo_vault", ALL_REPOS.get("demo_vault", VAULT_FILES))]
+    for repo_name, files in REAL_REPOS_ADRS.items():
+        repo_path = base / "repos" / repo_name
+        if repo_path.is_dir():
+            targets.append((repo_path, files))
+    for root, files_map in targets:
+        for rel_path, content in files_map.items():
+            file_path = root / rel_path
+            if not file_path.exists():
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(content, encoding="utf-8")
+

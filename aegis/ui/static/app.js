@@ -45,7 +45,53 @@ document.addEventListener("DOMContentLoaded", () => {
   initEventListeners();
   initTheme();
   initGreeting();
+  initAdrWatcher();
 });
+
+// Live ingestion: the server reloads memory when ADRs or notes change on disk;
+// tell the user and refresh the memory panel.
+function showToast(title, body) {
+  let stack = document.getElementById("toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.id = "toast-stack";
+    stack.style.cssText = "position:fixed; right:20px; bottom:20px; z-index:9999; display:flex; flex-direction:column; gap:8px; max-width:360px;";
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement("div");
+  toast.style.cssText = "background:var(--surface, #fff); color:var(--text-primary, #111); border:1px solid var(--border, rgba(0,0,0,0.12)); border-left:3px solid var(--accent-cyan, #22d3ee); border-radius:10px; padding:10px 14px; box-shadow:0 8px 24px rgba(0,0,0,0.12); font-size:13px; line-height:1.45; transition:opacity .3s;";
+  toast.innerHTML = `<div style="font-weight:600; margin-bottom:2px;">${escapeHtml(title)}</div><div style="color:var(--text-muted, #666); word-break:break-all;">${body}</div>`;
+  stack.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = "0"; setTimeout(() => toast.remove(), 350); }, 6000);
+}
+
+function initAdrWatcher() {
+  let lastSeq = null;
+  const describe = (e) => {
+    const parts = [];
+    (e.added || []).forEach(f => parts.push(`+ ${escapeHtml(f)}`));
+    (e.modified || []).forEach(f => parts.push(`~ ${escapeHtml(f)}`));
+    (e.removed || []).forEach(f => parts.push(`&minus; ${escapeHtml(f)}`));
+    return parts.join("<br>");
+  };
+  const poll = async () => {
+    try {
+      const res = await fetch(`/api/memory/changes?since=${lastSeq ?? 0}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (lastSeq === null) { lastSeq = data.seq; return; }  // ignore changes from before this page load
+      if (!data.events.length) return;
+      lastSeq = data.seq;
+      data.events.forEach(e => {
+        if (e.error) showToast("Memory reload failed", escapeHtml(e.error));
+        else showToast(`Memory updated · ${e.workspace}`, describe(e) + "<br>Next request uses the new decisions.");
+      });
+      if (typeof initMemory === "function") initMemory();
+    } catch (err) { /* server restarting; try again next tick */ }
+  };
+  poll();
+  setInterval(poll, 2000);
+}
 
 // Welcome greeting: picks a fresh, time-aware line on every load
 const GREETINGS = {
@@ -1308,6 +1354,17 @@ function renderAssistantResponse(container, data, promptText) {
   const excludedFiles = (data.excluded_files || []).map(f => f.path.split("/").pop()).join(", ") || "None";
   const activePolicy = data.policy && data.policy.primary_id ? data.policy.primary_id : "None";
   const retrieval = (data.policy && data.policy.retrieval) || {};
+  // Say why the task type came from where it did, including what Verdict thought
+  const v = data.verdict || {};
+  const vTaskP = typeof v.confidence === "number" ? v.confidence.toFixed(2) : null;
+  const vNeed = typeof v.threshold === "number" ? v.threshold.toFixed(2) : null;
+  const taskSourceText = data.task_source === "verdict"
+    ? `Verdict, p=${vTaskP}`
+    : !v.loaded
+      ? "keyword rule (Verdict unavailable)"
+      : v.selected_id
+        ? `keyword rule · Verdict leaned ${v.selected_id} at p=${vTaskP}${vNeed ? `, needs ${vNeed}` : ""}`
+        : "keyword rule";
   const retrievalText = retrieval.source === "verdict"
     ? `Verdict pick${retrieval.pick && retrieval.pick !== data.policy.primary_id ? ` (${retrieval.pick} → successor)` : ""}, p=${(retrieval.confidence || 0).toFixed(2)}`
     : retrieval.source === "overlap" ? "keyword overlap" : "none";
@@ -1334,7 +1391,8 @@ function renderAssistantResponse(container, data, promptText) {
       <div class="telemetry-grid">
         <div class="telemetry-item">
           <span class="telemetry-label">Task Type</span>
-          <span class="telemetry-val">${escapeHtml(data.task_type)} (${data.task_source})</span>
+          <span class="telemetry-val">${escapeHtml(data.task_type)}</span>
+          <span class="telemetry-label" style="margin-top:2px;">via ${escapeHtml(taskSourceText)}</span>
         </div>
         <div class="telemetry-item">
           <span class="telemetry-label">Primary Policy</span>

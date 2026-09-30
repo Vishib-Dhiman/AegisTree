@@ -193,6 +193,7 @@ def apply_patch(
     habit_nodes = []
     if model_output.strip():
         for details in extract_habits(extract_code(model_output), clean_code):
+            details["workspace"] = str(root)
             habit_nodes.append(graph.add_habit(details["label"], metadata=details))
     habit_node = habit_nodes[0] if habit_nodes else None
     habit_label = "; ".join(h.label for h in habit_nodes) or None

@@ -7,7 +7,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from pydantic import BaseModel
 
 from aegis.core.ast_scoper import ASTScoper, ScopeType
@@ -186,6 +186,39 @@ def tokenize_text(text: str) -> Set[str]:
     return tokens
 
 
+# (path, mtime_ns, size) -> (scope, reason); parsing is ~95% of a repo scan
+# (sqlalchemy: 678 files, ~320 ms), so only new or edited files are re-parsed
+_SCOPE_CACHE: Dict[Tuple[str, int, int], Tuple[Optional[str], str]] = {}
+
+
+def scoped_exclusions(root: Path) -> List[Dict[str, Any]]:
+    """Test fixtures and docstring-only files under root, excluded from the leaf context."""
+    excluded: List[Dict[str, Any]] = []
+    if not root.exists():
+        return excluded
+    for py_file in sorted(root.rglob("*.py")):
+        try:
+            st = py_file.stat()
+            key = (str(py_file), st.st_mtime_ns, st.st_size)
+            if key not in _SCOPE_CACHE:
+                scoped = ASTScoper.scope_file(py_file)
+                if scoped.scope in (ScopeType.TEST_FIXTURE, ScopeType.DOCSTRING_COMMENT):
+                    _SCOPE_CACHE[key] = (scoped.scope.value, scoped.metadata.get("reason", "Excluded scope"))
+                else:
+                    _SCOPE_CACHE[key] = (None, "")
+            scope, reason = _SCOPE_CACHE[key]
+            if scope is not None:
+                rel_path = str(py_file.relative_to(root)) if py_file.is_relative_to(root) else str(py_file)
+                excluded.append({
+                    "path": f"{root.name}/{rel_path}" if not str(py_file).startswith(root.name) else str(py_file),
+                    "scope": scope,
+                    "reason": reason,
+                })
+        except Exception:
+            continue
+    return excluded
+
+
 class Router:
     """Routes requests using Keyword rules, Verdict classifier, and MemoryGraph."""
 
@@ -261,23 +294,14 @@ class Router:
             task_source = "keyword"
 
         # 2. Scope exclusions from demo_vault
-        excluded_files: List[Dict[str, Any]] = []
-        if root.exists():
-            for py_file in sorted(root.rglob("*.py")):
-                try:
-                    scoped = ASTScoper.scope_file(py_file)
-                    if scoped.scope in (ScopeType.TEST_FIXTURE, ScopeType.DOCSTRING_COMMENT):
-                        rel_path = str(py_file.relative_to(root)) if py_file.is_relative_to(root) else str(py_file)
-                        excluded_files.append({
-                            "path": f"{root.name}/{rel_path}" if not str(py_file).startswith(root.name) else str(py_file),
-                            "scope": scoped.scope.value,
-                            "reason": scoped.metadata.get("reason", "Excluded scope"),
-                        })
-                except Exception:
-                    continue
+        excluded_files = scoped_exclusions(root)
 
         # 3. Active habits
-        active_habits = [n for n in self.graph.active_nodes(query_time) if n.type == NodeType.HABIT]
+        workspace_id = str(root.resolve())
+        active_habits = [
+            n for n in self.graph.active_nodes(query_time)
+            if n.type == NodeType.HABIT and n.metadata.get("workspace") in (None, workspace_id)
+        ]
 
         # 4. Handle write_adr early
         if task_type == "write_adr":

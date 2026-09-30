@@ -5,8 +5,10 @@ Binds to 127.0.0.1:8080 strictly, enforces local execution, and provides demo AP
 from __future__ import annotations
 import json
 import re
+import threading
 import time
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,13 +21,14 @@ from pydantic import BaseModel
 
 from aegis.core.config import SystemConfig, config_manager
 from aegis.core.ingestion import ADRParser, WorkspaceIngestor
+from aegis.core.watcher import WorkspaceWatcher
 from aegis.core.models import EpistemicStatus, NodeType
 from aegis.demo import seed_vault
 from aegis.mcp.tools import apply_patch, propose_patch, search_decisions
 from aegis.system1.engine import EngineUnavailable
 from aegis.system1.graph import MemoryGraph
 from aegis.system1.leaf import compile_leaf, estimate_tokens, extract_function_source, select_function_name, select_target
-from aegis.system1.router import Router
+from aegis.system1.router import Router, scoped_exclusions
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
 from aegis.system2.prompt import (
     compile_baseline,
@@ -58,7 +61,8 @@ if not workspace_root.is_absolute():
 FREE_MODE_KEYS = {"__free__", "none", "free", "no_workspace"}
 FREE_MODE_NAME = "No workspace"
 free_mode = False
-seed_vault.write_all(PROJECT_ROOT)
+# Create missing seed files only; resets (/api/reset, demo.sh) do the full rewrite
+seed_vault.write_missing(PROJECT_ROOT)
 
 storage_dir = Path(config.storage_dir)
 storage_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +173,7 @@ def reset_demo() -> Dict[str, Any]:
     for n in note_nodes:
         graph.upsert_node(n)
 
-    router = Router(graph=graph, config=config)
+    router = Router(graph=graph, config=config, engine=router.engine)
     runs_cache.clear()
     return {"status": "ok", "message": "Demo reset complete"}
 
@@ -266,6 +270,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "confidence": route.verdict_confidence or 0.0,
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
+                "threshold": config.system1_confidence_threshold,
             },
             "policy": {
                 "primary_id": route.primary_policy_id,
@@ -312,6 +317,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "confidence": route.verdict_confidence or 0.0,
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
+                "threshold": config.system1_confidence_threshold,
             },
             "policy": {
                 "primary_id": None,
@@ -351,6 +357,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "confidence": route.verdict_confidence or 0.0,
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
+                "threshold": config.system1_confidence_threshold,
             },
             "policy": {
                 "primary_id": None,
@@ -494,6 +501,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
             "confidence": route.verdict_confidence or 0.0,
             "latency_ms": route.verdict_latency_ms or 0.0,
             "error": route.verdict_error,
+            "threshold": config.system1_confidence_threshold,
         },
         "policy": {
             "primary_id": route.primary_policy_id,
@@ -554,6 +562,7 @@ def run_prompt_stream(req: RunRequest):
                     "confidence": route.verdict_confidence or 0.0,
                     "latency_ms": route.verdict_latency_ms or 0.0,
                     "error": route.verdict_error,
+                    "threshold": config.system1_confidence_threshold,
                 },
                 "policy": {
                     "primary_id": route.primary_policy_id,
@@ -611,6 +620,7 @@ def run_prompt_stream(req: RunRequest):
                     "confidence": route.verdict_confidence or 0.0,
                     "latency_ms": route.verdict_latency_ms or 0.0,
                     "error": route.verdict_error,
+                    "threshold": config.system1_confidence_threshold,
                 },
                 "policy": {
                     "primary_id": None,
@@ -659,6 +669,7 @@ def run_prompt_stream(req: RunRequest):
                     "confidence": route.verdict_confidence or 0.0,
                     "latency_ms": route.verdict_latency_ms or 0.0,
                     "error": route.verdict_error,
+                    "threshold": config.system1_confidence_threshold,
                 },
                 "policy": {
                     "primary_id": route.primary_policy_id,
@@ -731,6 +742,7 @@ def run_prompt_stream(req: RunRequest):
                 "confidence": route.verdict_confidence or 0.0,
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
+                "threshold": config.system1_confidence_threshold,
             },
             "policy": {
                 "primary_id": route.primary_policy_id,
@@ -995,18 +1007,53 @@ class UpdateAdrRequest(BaseModel):
     content: str
 
 
+_reload_lock = threading.Lock()
+
+
 def _reload_workspace_memory():
     global graph, router, workspace_root
-    # Preserve learned habits
-    habits = [n for n in graph.all_nodes() if n.type == NodeType.HABIT]
-    nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
-    note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes") if (workspace_root / "notes").exists() else []
-    graph.replace_corpus(nodes, edges)
-    for h in habits:
-        graph.upsert_node(h)
-    for n in note_nodes:
-        graph.upsert_node(n)
-    router = Router(graph=graph, config=config)
+    with _reload_lock:
+        # Preserve learned habits
+        habits = [n for n in graph.all_nodes() if n.type == NodeType.HABIT]
+        nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
+        note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes") if (workspace_root / "notes").exists() else []
+        graph.replace_corpus(nodes, edges)
+        for h in habits:
+            graph.upsert_node(h)
+        for n in note_nodes:
+            graph.upsert_node(n)
+        # Reuse the loaded Verdict engine instead of reading the weights again
+        router = Router(graph=graph, config=config, engine=router.engine)
+        # Parse the repo's files now so the first request is not the slow one
+        scoped_exclusions(workspace_root)
+
+
+# Live ingestion: ADRs or notes saved from any editor reload memory within ~1s
+adr_watcher = WorkspaceWatcher(
+    get_root=lambda: None if free_mode else workspace_root,
+    on_change=lambda changes: _reload_workspace_memory(),
+)
+
+
+@app.on_event("startup")
+def _start_adr_watcher() -> None:
+    # Re-ingest on every start: ADRs edited while the server was down would
+    # otherwise stay stale in the persisted graph (habits are kept)
+    _reload_workspace_memory()
+    adr_watcher.start()
+
+
+@app.on_event("shutdown")
+def _stop_adr_watcher() -> None:
+    adr_watcher.stop()
+
+
+@app.get("/api/memory/changes")
+def memory_changes(since: int = 0) -> Dict[str, Any]:
+    return {
+        "seq": adr_watcher.last_seq,
+        "events": [asdict(e) for e in adr_watcher.events_since(since)],
+    }
 
 
 class SwitchWorkspaceRequest(BaseModel):
