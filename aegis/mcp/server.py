@@ -28,8 +28,14 @@ def main():
     def search_decisions_tool(query: str) -> dict:
         from aegis.core.config import config_manager
         from aegis.system1.graph import MemoryGraph
-        graph = MemoryGraph(storage_dir=config_manager.config.storage_dir)
-        return search_decisions(graph, query)
+        from aegis.system1.router import Router
+        cfg = config_manager.config
+        graph = MemoryGraph(storage_dir=cfg.storage_dir)
+        router = Router(graph=graph, config=cfg)
+        return search_decisions(
+            graph, query, engine=router.engine,
+            workspace_root=cfg.workspace_root, threshold=cfg.system1_retrieval_threshold,
+        )
 
     @mcp.tool()
     def propose_patch_tool(prompt: str, code: str) -> dict:

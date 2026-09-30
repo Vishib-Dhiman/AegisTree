@@ -1077,7 +1077,27 @@ async function runWithPrompt(promptText, presetTitle = null) {
             if (!trimmed.startsWith("data: ")) continue;
             try {
               const evt = JSON.parse(trimmed.slice(6));
-              if (evt.type === "init") {
+              if (evt.type === "init" && evt.free) {
+                const step1 = document.getElementById("loader-step-row-1");
+                if (step1) {
+                  step1.innerHTML = `<span class="sparkle-mini">✓</span><span>No workspace attached: ADR checks off</span>`;
+                  step1.style.color = "var(--text-muted)";
+                }
+                const step2 = document.getElementById("loader-step-row-2");
+                if (step2) {
+                  step2.innerHTML = `<span class="sparkle-mini">✓</span><span>Sending request straight to the local model</span>`;
+                  step2.style.color = "var(--text-muted)";
+                }
+                const step3 = document.getElementById("loader-step-row-3");
+                if (step3) {
+                  step3.innerHTML = `<span class="spinner-orb-mini"></span><span>Streaming from ${escapeHtml(evt.model || "local model")}...</span>`;
+                  step3.style.color = "var(--accent-cyan)";
+                }
+                const phaseTitle = document.getElementById("loader-phase-title");
+                if (phaseTitle) phaseTitle.textContent = `Answering with ${evt.model || "local model"}...`;
+                const skeletonLabel = document.getElementById("skeleton-status-label");
+                if (skeletonLabel) skeletonLabel.textContent = "Streaming answer...";
+              } else if (evt.type === "init") {
                 const step1 = document.getElementById("loader-step-row-1");
                 if (step1 && evt.verdict) {
                   step1.innerHTML = `<span class="sparkle-mini">✓</span><span>System 1 (Verdict v1.4): matched ${escapeHtml(evt.policy ? evt.policy.primary_id : "policy")} in ${Math.round(evt.verdict.latency_ms || 32)}ms</span>`;
@@ -1135,7 +1155,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
     }
 
     currentRunId = data.run_id;
-    latestRunData = data;
+    latestRunData = data.status === "free" ? null : data;
     if (activeThreadId) {
       const curThread = threads.find(t => t.id === activeThreadId);
       if (curThread) {
@@ -1160,8 +1180,43 @@ async function runWithPrompt(promptText, presetTitle = null) {
   }
 }
 
+function renderFreeResponse(container, data) {
+  const a = data.aegis || {};
+  const card = document.createElement("div");
+  card.className = "code-card";
+  const reasoning = a.thinking ? `
+    <div class="reasoning-trace-container" style="margin: 0 20px 12px;">
+      <div class="reasoning-trace-label"><span class="sparkle-mini">✦</span><span>Model Reasoning Trace</span></div>
+      <div class="reasoning-trace-box">${escapeHtml(a.thinking)}</div>
+    </div>` : "";
+  card.innerHTML = `
+    <div class="code-card-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:600; font-size:13px; color:var(--text-primary);">Local model answer</span>
+        <span class="file-badge">No workspace · policy checks off</span>
+      </div>
+      <span class="code-meta">${escapeHtml(data.model || "local model")} &middot; ${Math.round(a.latency_ms || 0)}ms</span>
+    </div>
+    ${reasoning}
+    <div class="explain-body">${escapeHtml(a.text || "No answer returned")}</div>
+    <div class="unified-card-footer">
+      <span style="font-size:12.5px; color:var(--text-muted);">
+        No ADRs, bans or habits were applied and nothing was written to disk. Attach a workspace to turn governance back on.
+      </span>
+    </div>
+  `;
+  container.appendChild(card);
+}
+
 function renderAssistantResponse(container, data, promptText) {
   container.innerHTML = "";
+
+  if (data.status === "free") {
+    renderFreeResponse(container, data);
+    snapshotActiveThread();
+    scrollToBottom(true);
+    return;
+  }
 
   // 1. Thought Accordion (DeepSeek/ChatGPT style)
   const vLat = data.verdict && data.verdict.latency_ms > 0 ? Math.round(data.verdict.latency_ms) : 32;
@@ -1178,6 +1233,10 @@ function renderAssistantResponse(container, data, promptText) {
 
   const excludedFiles = (data.excluded_files || []).map(f => f.path.split("/").pop()).join(", ") || "None";
   const activePolicy = data.policy && data.policy.primary_id ? data.policy.primary_id : "None";
+  const retrieval = (data.policy && data.policy.retrieval) || {};
+  const retrievalText = retrieval.source === "verdict"
+    ? `Verdict pick${retrieval.pick && retrieval.pick !== data.policy.primary_id ? ` (${retrieval.pick} → successor)` : ""}, p=${(retrieval.confidence || 0).toFixed(2)}`
+    : retrieval.source === "overlap" ? "keyword overlap" : "none";
 
   const reasoningHtml = (data.aegis && data.aegis.thinking) ? `
     <div class="reasoning-trace-container">
@@ -1206,6 +1265,7 @@ function renderAssistantResponse(container, data, promptText) {
         <div class="telemetry-item">
           <span class="telemetry-label">Primary Policy</span>
           <span class="telemetry-val" style="color:var(--accent-cyan);">${escapeHtml(activePolicy)}</span>
+          <span class="telemetry-label" style="margin-top:2px;">via ${escapeHtml(retrievalText)}</span>
         </div>
         <div class="telemetry-item">
           <span class="telemetry-label">Token Compression</span>

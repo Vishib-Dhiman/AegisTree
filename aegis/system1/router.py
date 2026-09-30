@@ -15,7 +15,8 @@ from aegis.core.config import SystemConfig
 from aegis.core.models import ChoiceOption, ChoiceQuery, GraphNode, NodeType
 from aegis.system1.engine import DecisionEngine, EngineUnavailable
 from aegis.system1.graph import MemoryGraph
-from aegis.system1.policy_guard import find_forbidden, strongest_revival
+from aegis.system1.policy_guard import find_forbidden, revival_probability, strongest_revival
+from aegis.system1.retrieval import apply_tie_break, needs_tie_break, resolve, retrieve, tie_break
 from aegis.system1.verdict_engine import VerdictDecisionEngine
 
 
@@ -94,6 +95,11 @@ class RouteResult(BaseModel):
     blocked_literal: Optional[str] = None
     blocking_policy_id: Optional[str] = None
     block_method: Optional[Literal["literal", "semantic"]] = None
+    retrieval_source: Optional[Literal["verdict", "hybrid", "overlap", "none"]] = None
+    retrieval_pick: Optional[str] = None
+    retrieval_confidence: Optional[float] = None
+    retrieval_latency_ms: Optional[float] = None
+    retrieval_scores: Dict[str, Dict[str, float]] = {}
     block_confidence: Optional[float] = None
     revived_policy_id: Optional[str] = None
 
@@ -304,35 +310,25 @@ class Router:
                 draft_adr=draft_adr,
             )
 
-        # 5. Policy overlap search over ACTIVE decisions
-        active_decisions = [
-            n for n in self.graph.active_nodes(query_time)
-            if n.type == NodeType.ARCHITECTURE_DECISION
-        ]
+        # 5. Policy retrieval: token overlap + one Verdict pick over every decision
+        decisions = [n for n in self.graph.all_nodes() if n.type == NodeType.ARCHITECTURE_DECISION]
+        active_decisions = [n for n in decisions if n.is_active(query_time)]
+        superseded_decisions = [n for n in decisions if not n.is_active(query_time)]
+        retrieval = retrieve(self.engine, prompt, root, active_decisions, superseded_decisions)
+        resolution = resolve(retrieval, self.graph, self.config.system1_retrieval_threshold, query_time)
+        if needs_tie_break(resolution):
+            tie = tie_break(self.engine, prompt, root, resolution.policies)
+            resolution = apply_tie_break(resolution, tie, self.config.system1_confidence_threshold)
+        retrieval_fields = dict(
+            retrieval_source=resolution.source,
+            retrieval_pick=retrieval.pick,
+            retrieval_confidence=retrieval.pick_confidence if retrieval.pick else None,
+            retrieval_latency_ms=retrieval.latency_ms,
+            retrieval_scores=retrieval.scores(),
+        )
 
-        prompt_tokens = tokenize_text(prompt)
-        scored_policies = []
-        for dec in active_decisions:
-            dec_tags = {t.lower() for t in dec.tags}
-            dec_label_tokens = tokenize_text(dec.label)
-            dec_forbidden_tokens = set()
-            for f in dec.forbidden_literals:
-                dec_forbidden_tokens |= tokenize_text(f)
-            dec_required_tokens = set()
-            for r in dec.required_literals:
-                dec_required_tokens |= tokenize_text(r)
-
-            score = (
-                len(dec_tags & prompt_tokens)
-                + len(dec_label_tokens & prompt_tokens)
-                + len(dec_forbidden_tokens & prompt_tokens)
-                + len(dec_required_tokens & prompt_tokens)
-            )
-            if score > 0:
-                scored_policies.append((score, dec))
-
-        # Check for abstention: zero active decisions with score > 0
-        if not scored_policies:
+        # Abstain: no decision overlaps and Verdict did not confidently pick one
+        if not resolution.policies:
             if task_type == "edit_tests":
                 return RouteResult(
                     status="ready",
@@ -350,13 +346,21 @@ class Router:
                     habits=active_habits,
                     excluded_files=excluded_files,
                     abstain_reason=None,
+                    **retrieval_fields,
                 )
 
             checked_ids = [d.id for d in active_decisions]
-            abstain_msg = (
-                f"No accepted architecture decision overlaps request: '{prompt}'. "
-                f"Checked active decisions: {checked_ids}."
-            )
+            if resolution.verdict_says_none:
+                abstain_msg = (
+                    f"No accepted architecture decision covers request: '{prompt}'. "
+                    f"System 1 picked 'none of these' (p={retrieval.pick_confidence:.2f}) "
+                    f"over active decisions: {checked_ids}."
+                )
+            else:
+                abstain_msg = (
+                    f"No accepted architecture decision overlaps request: '{prompt}'. "
+                    f"Checked active decisions: {checked_ids}."
+                )
             return RouteResult(
                 status="abstained",
                 task_type=task_type,
@@ -373,57 +377,15 @@ class Router:
                 habits=active_habits,
                 excluded_files=excluded_files,
                 abstain_reason=abstain_msg,
+                **retrieval_fields,
             )
 
-        # Sort descending by score, tiebreak with valid_from descending
-        scored_policies.sort(
-            key=lambda x: (x[0], x[1].valid_from.timestamp() if x[1].valid_from else 0),
-            reverse=True,
+        active_policy_ids = [n.id for n in resolution.policies]
+        primary_policy_id = resolution.primary.id
+        policy_source: Literal["only_overlap", "verdict", "none"] = (
+            "verdict" if resolution.source in ("verdict", "hybrid") else "only_overlap"
         )
-        active_policy_ids = [dec.id for _, dec in scored_policies]
-
-        primary_policy_id: str
-        policy_source: Literal["only_overlap", "verdict", "none"]
-        policy_conf: Optional[float] = None
-
-        if len(scored_policies) == 1:
-            primary_policy_id = scored_policies[0][1].id
-            policy_source = "only_overlap"
-        else:
-            # Two or more: try Verdict if available
-            candidates = [dec for _, dec in scored_policies[:5]]
-            winner_node = candidates[0]
-            policy_source = "only_overlap"
-
-            if self.engine is not None:
-                try:
-                    options = [
-                        ChoiceOption(
-                            id=c.id,
-                            description=f"the binding decision titled {c.label}. {c.description[:120]}",
-                        )
-                        for c in candidates
-                    ]
-                    q = ChoiceQuery(
-                        id="policy_selection",
-                        question="Which architectural decision primarily governs this request?",
-                        options=options,
-                        allow_abstention=True,
-                    )
-                    vres = self.engine.evaluate_choice(context=build_context(prompt, root), query=q)
-                    candidate_ids = {c.id for c in candidates}
-                    picked = best_option(vres.probabilities, candidate_ids)
-                    picked_conf = relative_confidence(vres.probabilities, picked, candidate_ids) if picked else 0.0
-                    if picked and picked_conf >= self.config.system1_confidence_threshold:
-                        primary_policy_id = picked
-                        policy_source = "verdict"
-                        policy_conf = picked_conf
-                    else:
-                        primary_policy_id = winner_node.id
-                except Exception:
-                    primary_policy_id = winner_node.id
-            else:
-                primary_policy_id = winner_node.id
+        policy_conf: Optional[float] = resolution.confidence
 
         # 6. Closure (one hop supersedes edges from active_policy_ids to target nodes)
         negative_nodes: List[GraphNode] = []
@@ -433,9 +395,13 @@ class Router:
                 if succ.id not in superseded_by:
                     superseded_by[succ.id] = pol_id
                     negative_nodes.append(succ)
+        revival_candidate = resolution.revival_candidate
+        if revival_candidate is not None and revival_candidate.id not in superseded_by:
+            superseded_by[revival_candidate.id] = primary_policy_id
+            negative_nodes.append(revival_candidate)
 
         # 7. Check for forbidden literal requests in production implementation
-        active_policy_nodes = [dec for _, dec in scored_policies]
+        active_policy_nodes = resolution.policies
         block = check_forbidden_request(
             prompt=prompt,
             task_type=task_type,
@@ -462,12 +428,24 @@ class Router:
                 blocked_literal=block.literal,
                 blocking_policy_id=block.source_policy_id,
                 block_method="literal",
+                **retrieval_fields,
             )
 
         # 8. Paraphrased requests for a superseded decision ("the old wrap cipher")
         if task_type == "implement_production":
-            revival = strongest_revival(self.engine, prompt, root, negative_nodes)
-            if revival and revival[1] >= self.config.system1_revival_threshold:
+            revival = None
+            if revival_candidate is not None and self.engine is not None:
+                try:
+                    prob, _ = revival_probability(self.engine, prompt, root, revival_candidate)
+                    if prob >= self.config.system1_revival_assist_threshold:
+                        revival = (revival_candidate, prob)
+                except Exception:
+                    revival = None
+            if revival is None:
+                strongest = strongest_revival(self.engine, prompt, root, negative_nodes)
+                if strongest and strongest[1] >= self.config.system1_revival_threshold:
+                    revival = strongest
+            if revival:
                 revived, prob = revival
                 enforcing_id = superseded_by[revived.id]
                 return RouteResult(
@@ -493,6 +471,7 @@ class Router:
                     block_method="semantic",
                     block_confidence=prob,
                     revived_policy_id=revived.id,
+                    **retrieval_fields,
                 )
 
         return RouteResult(
@@ -511,4 +490,5 @@ class Router:
             habits=active_habits,
             excluded_files=excluded_files,
             abstain_reason=None,
+            **retrieval_fields,
         )

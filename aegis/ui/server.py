@@ -29,6 +29,7 @@ from aegis.system1.router import Router
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
 from aegis.system2.prompt import (
     compile_baseline,
+    compile_free_prompt,
     compute_unified_diff,
     extract_code,
     get_raw_baseline_code,
@@ -51,6 +52,12 @@ if config.system2_provider == "ollama":
 workspace_root = Path(config.workspace_root)
 if not workspace_root.is_absolute():
     workspace_root = (PROJECT_ROOT / workspace_root).resolve()
+
+# "No workspace" mode: requests go straight to the local model with no ADRs,
+# bans, abstention or habits, and nothing is written to disk.
+FREE_MODE_KEYS = {"__free__", "none", "free", "no_workspace"}
+FREE_MODE_NAME = "No workspace"
+free_mode = False
 seed_vault.write_all(PROJECT_ROOT)
 
 storage_dir = Path(config.storage_dir)
@@ -152,8 +159,9 @@ def reset_demo() -> Dict[str, Any]:
             except Exception:
                 pass
 
-    global graph, router, workspace_root
+    global graph, router, workspace_root, free_mode
     workspace_root = PROJECT_ROOT / "demo_vault"
+    free_mode = False
     graph = MemoryGraph(storage_dir=storage_dir)
     nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
     note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes")
@@ -166,11 +174,63 @@ def reset_demo() -> Dict[str, Any]:
     return {"status": "ok", "message": "Demo reset complete"}
 
 
+def _free_payload(run_id: str, text: str, thinking: str, lat_ms: float, error: bool) -> Dict[str, Any]:
+    if not thinking and "<think>" in text and "</think>" in text:
+        m = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
+        if m:
+            thinking = m.group(1).strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return {
+        "type": "finished",
+        "run_id": run_id,
+        "status": "free",
+        "task_type": "free",
+        "task_source": "none",
+        "model": config_manager.config.system2_model,
+        "workspace": None,
+        "aegis": {
+            "text": text,
+            "thinking": thinking,
+            "code": extract_code(text),
+            "latency_ms": lat_ms,
+            "error": error,
+        },
+        "tool_log": [{"tool": "generate", "status": "error" if error else "ok"}],
+    }
+
+
+def _free_stream(run_id: str, prompt: str):
+    """No-workspace generation, yielding the same SSE event types as a governed run."""
+    yield f"data: {json.dumps({'type': 'init', 'run_id': run_id, 'status': 'free', 'free': True, 'model': config_manager.config.system2_model})}\n\n"
+    text, thinking, error = "", "", False
+    t0 = time.perf_counter()
+    try:
+        for chunk in generator.complete_stream(compile_free_prompt(prompt)):
+            if chunk.get("thinking"):
+                thinking += chunk["thinking"]
+                yield f"data: {json.dumps({'type': 'thinking', 'chunk': chunk['thinking']})}\n\n"
+            if chunk.get("response"):
+                text += chunk["response"]
+                yield f"data: {json.dumps({'type': 'response', 'chunk': chunk['response']})}\n\n"
+    except Exception as e:
+        text, error = f"Local generator error: {e}", True
+    payload = _free_payload(run_id, text, thinking, (time.perf_counter() - t0) * 1000.0, error)
+    yield f"data: {json.dumps(payload, default=str)}\n\n"
+
+
 @app.post("/api/run")
 def run_prompt(req: RunRequest) -> Dict[str, Any]:
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
     tool_log = []
+
+    if free_mode:
+        t0 = time.perf_counter()
+        try:
+            gen = generator.complete(compile_free_prompt(prompt))
+            return _free_payload(run_id, gen.text, gen.thinking or "", (time.perf_counter() - t0) * 1000.0, False)
+        except Exception as e:
+            return _free_payload(run_id, f"Local generator error: {e}", "", (time.perf_counter() - t0) * 1000.0, True)
 
     # 1. Search decisions tool
     search_res = search_decisions(graph, prompt)
@@ -212,6 +272,13 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "source": route.policy_source,
                 "confidence": route.policy_confidence,
                 "active_ids": route.active_policy_ids,
+                "retrieval": {
+                    "source": route.retrieval_source,
+                    "pick": route.retrieval_pick,
+                    "confidence": route.retrieval_confidence,
+                    "latency_ms": route.retrieval_latency_ms,
+                    "scores": route.retrieval_scores,
+                },
             },
             "negative": [n.model_dump() for n in route.negative_nodes],
             "habits": [h.model_dump() for h in route.habits],
@@ -251,6 +318,13 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "source": "none",
                 "confidence": None,
                 "active_ids": [],
+                "retrieval": {
+                    "source": route.retrieval_source,
+                    "pick": route.retrieval_pick,
+                    "confidence": route.retrieval_confidence,
+                    "latency_ms": route.retrieval_latency_ms,
+                    "scores": route.retrieval_scores,
+                },
             },
             "negative": [],
             "habits": [h.model_dump() for h in route.habits],
@@ -283,6 +357,13 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "source": "none",
                 "confidence": None,
                 "active_ids": [],
+                "retrieval": {
+                    "source": route.retrieval_source,
+                    "pick": route.retrieval_pick,
+                    "confidence": route.retrieval_confidence,
+                    "latency_ms": route.retrieval_latency_ms,
+                    "scores": route.retrieval_scores,
+                },
             },
             "negative": [],
             "habits": [h.model_dump() for h in route.habits],
@@ -419,6 +500,13 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
             "source": route.policy_source,
             "confidence": route.policy_confidence,
             "active_ids": route.active_policy_ids,
+            "retrieval": {
+                "source": route.retrieval_source,
+                "pick": route.retrieval_pick,
+                "confidence": route.retrieval_confidence,
+                "latency_ms": route.retrieval_latency_ms,
+                "scores": route.retrieval_scores,
+            },
         },
         "negative": negative_formatted,
         "habits": [h.model_dump() for h in route.habits],
@@ -441,6 +529,9 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
 def run_prompt_stream(req: RunRequest):
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
+
+    if free_mode:
+        return StreamingResponse(_free_stream(run_id, prompt), media_type="text/event-stream")
 
     def event_stream():
         tool_log = []
@@ -469,6 +560,13 @@ def run_prompt_stream(req: RunRequest):
                     "source": route.policy_source,
                     "confidence": route.policy_confidence,
                     "active_ids": route.active_policy_ids,
+                    "retrieval": {
+                        "source": route.retrieval_source,
+                        "pick": route.retrieval_pick,
+                        "confidence": route.retrieval_confidence,
+                        "latency_ms": route.retrieval_latency_ms,
+                        "scores": route.retrieval_scores,
+                    },
                 },
                 "negative": [
                     {"id": neg.id, "literals": neg.forbidden_literals}
@@ -519,6 +617,13 @@ def run_prompt_stream(req: RunRequest):
                     "source": "none",
                     "confidence": None,
                     "active_ids": [],
+                    "retrieval": {
+                        "source": route.retrieval_source,
+                        "pick": route.retrieval_pick,
+                        "confidence": route.retrieval_confidence,
+                        "latency_ms": route.retrieval_latency_ms,
+                        "scores": route.retrieval_scores,
+                    },
                 },
                 "negative": [],
                 "habits": [h.model_dump() for h in route.habits],
@@ -560,6 +665,13 @@ def run_prompt_stream(req: RunRequest):
                     "source": route.policy_source,
                     "confidence": route.policy_confidence,
                     "active_ids": route.active_policy_ids,
+                    "retrieval": {
+                        "source": route.retrieval_source,
+                        "pick": route.retrieval_pick,
+                        "confidence": route.retrieval_confidence,
+                        "latency_ms": route.retrieval_latency_ms,
+                        "scores": route.retrieval_scores,
+                    },
                 },
                 "negative": [
                     {"id": neg.id, "literals": neg.forbidden_literals}
@@ -625,6 +737,13 @@ def run_prompt_stream(req: RunRequest):
                 "source": route.policy_source,
                 "confidence": route.policy_confidence,
                 "active_ids": route.active_policy_ids,
+                "retrieval": {
+                    "source": route.retrieval_source,
+                    "pick": route.retrieval_pick,
+                    "confidence": route.retrieval_confidence,
+                    "latency_ms": route.retrieval_latency_ms,
+                    "scores": route.retrieval_scores,
+                },
             },
             "negative": negative_formatted,
             "habits": [h.model_dump() for h in route.habits],
@@ -741,6 +860,8 @@ def run_prompt_stream(req: RunRequest):
 
 @app.post("/api/approve")
 def approve_patch(req: ApproveRequest) -> Dict[str, Any]:
+    if free_mode:
+        raise HTTPException(status_code=409, detail="No workspace attached: nothing to commit.")
     if req.run_id not in runs_cache:
         raise HTTPException(status_code=409, detail="Run expired. Press Run again.")
 
@@ -895,6 +1016,8 @@ class SwitchWorkspaceRequest(BaseModel):
 @app.get("/api/workspace")
 def get_workspace() -> Dict[str, Any]:
     global workspace_root
+    if free_mode:
+        return {"workspace_root": None, "name": FREE_MODE_NAME, "exists": True, "adr_count": 0, "note_count": 0, "free": True}
     adr_count = len(list((workspace_root / "docs" / "adr").glob("*.md"))) if (workspace_root / "docs" / "adr").exists() else 0
     note_count = len(list((workspace_root / "notes").glob("*.md"))) if (workspace_root / "notes").exists() else 0
     return {
@@ -910,6 +1033,17 @@ def get_workspace() -> Dict[str, Any]:
 def list_workspaces() -> Dict[str, Any]:
     global workspace_root
     presets = [
+        {
+            "id": "__free__",
+            "name": FREE_MODE_NAME,
+            "path": "__free__",
+            "repo_url": None,
+            "title": "No workspace (unrestricted)",
+            "domain": "General",
+            "icon": "💬",
+            "adrs": ["No ADRs", "No policy checks", "Nothing written to disk"],
+            "desc": "Plain local assistant: requests go straight to the local model. Switch back to a workspace to re-enable ADR governance.",
+        },
         {
             "id": "demo_vault",
             "name": "demo_vault",
@@ -956,16 +1090,27 @@ def list_workspaces() -> Dict[str, Any]:
         },
     ]
     return {
-        "active": workspace_root.name,
-        "active_path": str(workspace_root.resolve()),
+        "active": FREE_MODE_NAME if free_mode else workspace_root.name,
+        "active_path": "(none)" if free_mode else str(workspace_root.resolve()),
+        "free": free_mode,
         "presets": presets,
     }
 
 
 @app.post("/api/workspace")
 def switch_workspace(req: SwitchWorkspaceRequest) -> Dict[str, Any]:
-    global workspace_root
+    global workspace_root, free_mode
     raw = req.path.strip()
+    if raw.lower() in FREE_MODE_KEYS:
+        free_mode = True
+        return {
+            "status": "switched",
+            "workspace_root": "(none)",
+            "name": FREE_MODE_NAME,
+            "adr_count": 0,
+            "note_count": 0,
+            "free": True,
+        }
     preset_shortcuts = {
         "demo_vault": PROJECT_ROOT / "demo_vault",
         "cryptography": PROJECT_ROOT / "repos" / "cryptography",
@@ -989,6 +1134,7 @@ def switch_workspace(req: SwitchWorkspaceRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Path '{target_path}' is not a directory.")
 
     workspace_root = target_path
+    free_mode = False
     _reload_workspace_memory()
 
     adr_count = len(list((workspace_root / "docs" / "adr").glob("*.md"))) if (workspace_root / "docs" / "adr").exists() else 0

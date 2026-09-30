@@ -28,6 +28,9 @@ def contains_literal(text: str, literal: str) -> bool:
     lit = literal_tokens(literal)
     if not lit:
         return False
+    if len(lit) == 1 and re.search(r"[^A-Za-z0-9_]", literal):
+        # ".dict()" would reduce to the everyday word "dict"; keep its code shape
+        return literal.lower() in text.lower()
     toks = literal_tokens(text)
     n = len(lit)
     if any(toks[i:i + n] == lit for i in range(len(toks) - n + 1)):

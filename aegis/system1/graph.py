@@ -243,6 +243,32 @@ class MemoryGraph:
                     results.append(target_node)
         return results
 
+    def predecessors(self, node_id: str, relation: Optional[str] = None) -> List[GraphNode]:
+        if node_id not in self._nx_graph:
+            return []
+        results: List[GraphNode] = []
+        for pred in self._nx_graph.predecessors(node_id):
+            edge_data = self._nx_graph.get_edge_data(pred, node_id) or {}
+            if relation is None or edge_data.get("relation") == relation:
+                source_node = self.node(pred)
+                if source_node:
+                    results.append(source_node)
+        return results
+
+    def active_successor(self, node_id: str, at: Optional[datetime] = None) -> Optional[GraphNode]:
+        """The active decision that (transitively) supersedes node_id, if any."""
+        frontier, seen = [node_id], {node_id}
+        while frontier:
+            current = frontier.pop(0)
+            for newer in self.predecessors(current, relation="supersedes"):
+                if newer.id in seen:
+                    continue
+                if newer.is_active(at):
+                    return newer
+                seen.add(newer.id)
+                frontier.append(newer.id)
+        return None
+
     def add_habit(
         self,
         text: str,

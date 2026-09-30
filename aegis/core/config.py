@@ -55,6 +55,10 @@ class SystemConfig(BaseModel):
     system1_confidence_threshold: float = 0.5
     # Revival checks below this stay unblocked; output-side literal checks still apply
     system1_revival_threshold: float = 0.7
+    # Verdict policy retrieval: pick must clear this to lead over token overlap
+    system1_retrieval_threshold: float = 0.5
+    # Revival block when retrieval itself landed on the superseded decision
+    system1_revival_assist_threshold: float = 0.5
     system2_model: str = "qwen2.5-coder:3b"
     system2_provider: str = "ollama"  # web startup rejects "mock"
     ollama_base_url: str = "http://127.0.0.1:11434"

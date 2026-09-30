@@ -44,6 +44,17 @@ def compile_baseline(
     return baseline_text
 
 
+def compile_free_prompt(prompt: str) -> str:
+    """Prompt for No-workspace mode: no repository, decisions, bans or habits attached."""
+    return (
+        "You are a coding assistant running entirely on this machine.\n"
+        "No repository is attached and no architecture decisions apply.\n"
+        "Answer the request directly. Put any code in fenced blocks.\n\n"
+        "USER REQUEST:\n"
+        f"{prompt}"
+    )
+
+
 def extract_code(text: str) -> str:
     """Extract code from the model output. Takes first fenced block or raw text."""
     # Look for ```python or ``` block

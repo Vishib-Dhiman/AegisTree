@@ -91,7 +91,13 @@ def run_prompt_workflow(prompt_text: str):
     s1_table.add_row("[bold]Decision Status:[/bold]", f"[bold green]{route.status.upper()}[/bold green]" if route.status == "ready" else f"[bold red]{route.status.upper()}[/bold red]")
     s1_table.add_row("[bold]Task Type:[/bold]", f"[cyan]{route.task_type}[/cyan] (via {route.task_source})")
     s1_table.add_row("[bold]Primary Policy:[/bold]", f"[magenta]{route.primary_policy_id or 'None'}[/magenta] (source: {route.policy_source})")
-    s1_table.add_row("[bold]Verdict v1.4 Latency:[/bold]", f"[bold yellow]{s1_latency:.2f} ms[/bold yellow] (Confidence: {route.verdict_confidence or 0.85:.2f})")
+    if route.retrieval_source == "verdict":
+        retrieval_text = f"Verdict pick {route.retrieval_pick} (p={route.retrieval_confidence:.2f})"
+    else:
+        retrieval_text = route.retrieval_source or "none"
+    s1_table.add_row("[bold]Policy Retrieval:[/bold]", retrieval_text)
+    confidence_text = f"{route.verdict_confidence:.2f}" if route.verdict_confidence is not None else "n/a"
+    s1_table.add_row("[bold]System 1 Latency:[/bold]", f"[bold yellow]{s1_latency:.2f} ms[/bold yellow] (Task confidence: {confidence_text})")
     s1_table.add_row("[bold]Air-Gap Status:[/bold]", "[bold green]0 External Packets Transmitted (100% Sovereign)[/bold green]")
 
     console.print(Panel(s1_table, title="[bold cyan]System 1: Non-Autoregressive Decision Layer[/bold cyan]", border_style="cyan"))

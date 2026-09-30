@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Optional, Union
 
 from aegis.core.models import NodeType
 from aegis.mcp.feedback import extract_habits, replace_function_source
+from aegis.system1.engine import DecisionEngine
 from aegis.system1.graph import MemoryGraph
+from aegis.system1.retrieval import apply_tie_break, needs_tie_break, resolve, retrieve, tie_break
 from aegis.system1.policy_guard import find_forbidden
 from aegis.system1.leaf import extract_function_source, select_function_name, select_target
 from aegis.system1.router import RouteResult, tokenize_text
@@ -20,38 +22,41 @@ def search_decisions(
     graph: MemoryGraph,
     query: str,
     now: Optional[datetime] = None,
+    engine: Optional[DecisionEngine] = None,
+    workspace_root: Union[str, Path] = "demo_vault",
+    threshold: float = 0.5,
 ) -> Dict[str, Any]:
-    """Returns active decisions, overlapping ids, and negative literals.
-    Same overlap and closure rules as the router. No model call.
+    """Returns active decisions, the decisions governing the query, and negative literals.
+    Same retrieval and closure rules as the router; overlap only when no engine is given.
     """
     query_time = now or datetime.now(timezone.utc)
-    active_decisions = [
-        n for n in graph.active_nodes(query_time)
-        if n.type == NodeType.ARCHITECTURE_DECISION
-    ]
+    decisions = [n for n in graph.all_nodes() if n.type == NodeType.ARCHITECTURE_DECISION]
+    active_decisions = [n for n in decisions if n.is_active(query_time)]
+    superseded = [n for n in decisions if not n.is_active(query_time)]
 
-    tokens = tokenize_text(query)
-    scored = []
-    for dec in active_decisions:
-        dec_tags = {t.lower() for t in dec.tags}
-        dec_label_tokens = tokenize_text(dec.label)
-        score = len(dec_tags & tokens) + len(dec_label_tokens & tokens)
-        if score > 0:
-            scored.append((score, dec))
+    retrieval = retrieve(engine, query, workspace_root, active_decisions, superseded)
+    resolution = resolve(retrieval, graph, threshold, query_time)
+    if needs_tie_break(resolution):
+        resolution = apply_tie_break(
+            resolution, tie_break(engine, query, workspace_root, resolution.policies), threshold
+        )
+    overlapping_ids = [n.id for n in resolution.policies]
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    overlapping_ids = [dec.id for _, dec in scored]
-
-    # Closure: one hop supersedes
+    # Closure: one hop supersedes, plus a superseded decision the query points at directly
     negative_literals = set()
     for dec_id in overlapping_ids:
         for succ in graph.successors(dec_id, relation="supersedes"):
             negative_literals.update(succ.forbidden_literals)
+    if resolution.revival_candidate is not None:
+        negative_literals.update(resolution.revival_candidate.forbidden_literals)
 
     return {
         "active_decisions": [{"id": d.id, "label": d.label} for d in active_decisions],
         "overlapping_ids": overlapping_ids,
         "negative_literals": sorted(list(negative_literals)),
+        "retrieval_source": resolution.source,
+        "retrieval_pick": retrieval.pick,
+        "retrieval_confidence": retrieval.pick_confidence if retrieval.pick else None,
     }
 
 
