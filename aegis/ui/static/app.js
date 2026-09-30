@@ -343,9 +343,12 @@ async function initHealth() {
     if (!res.ok) return;
     const data = await res.json();
 
+    webSearchAllowed = data.web_search_allowed !== false;
+    updateComposerMode();
+
     const pillVerdict = document.getElementById("pill-verdict");
     if (data.verdict_loaded) {
-      pillVerdict.innerHTML = '<span class="badge-dot"></span> Verdict v1.4 (32ms)';
+      pillVerdict.innerHTML = '<span class="badge-dot"></span> Verdict v1.4 · local';
       pillVerdict.className = "status-badge green";
     } else {
       pillVerdict.innerHTML = '<span class="badge-dot"></span> Verdict unavailable';
@@ -419,6 +422,61 @@ async function initModelSelector() {
 
 let currentWorkspaceName = "demo_vault";
 
+// Web search: No-workspace mode only, off unless the user turns it on
+let webSearchAllowed = true;
+let webSearchOn = false;
+try { webSearchOn = localStorage.getItem("clearsky_web_search") === "1"; } catch (e) {}
+
+function isFreeMode() {
+  return currentWorkspaceName === "No workspace";
+}
+
+function webSearchActive() {
+  return isFreeMode() && webSearchAllowed && webSearchOn;
+}
+
+function updateComposerMode() {
+  const free = isFreeMode();
+  const pillText = document.getElementById("policy-pill-text");
+  if (pillText) pillText.textContent = free ? "Policy gate off" : "Policy gate on";
+
+  let btn = document.getElementById("btn-web-search");
+  const pill = document.getElementById("policy-pill");
+  if (!btn && pill) {
+    btn = document.createElement("button");
+    btn.id = "btn-web-search";
+    btn.className = "input-action-btn";
+    btn.type = "button";
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg><span id="btn-web-search-label">Web</span>';
+    btn.addEventListener("click", () => {
+      webSearchOn = !webSearchOn;
+      try { localStorage.setItem("clearsky_web_search", webSearchOn ? "1" : "0"); } catch (e) {}
+      updateComposerMode();
+    });
+    pill.parentNode.insertBefore(btn, pill.nextSibling);
+  }
+  if (btn) {
+    btn.style.display = free && webSearchAllowed ? "" : "none";
+    btn.setAttribute("aria-pressed", webSearchOn ? "true" : "false");
+    btn.title = webSearchOn
+      ? "Web search on: your message is sent to a search engine"
+      : "Web search off: answers come only from the local model";
+    btn.style.color = webSearchOn ? "var(--accent-cyan, #22d3ee)" : "";
+    btn.style.borderColor = webSearchOn ? "var(--accent-cyan, #22d3ee)" : "";
+    const label = document.getElementById("btn-web-search-label");
+    if (label) label.textContent = webSearchOn ? "Web on" : "Web";
+  }
+
+  const note = document.getElementById("input-footer-note");
+  if (note) {
+    note.textContent = !free
+      ? "Runs entirely on this machine. No prompts, code, or telemetry reach a cloud API."
+      : webSearchActive()
+        ? "Web search on: your message is sent to a search engine (DuckDuckGo, then Wikipedia). Repository code and ADRs never leave this machine."
+        : "No workspace: policy checks are off. Everything still runs on this machine.";
+  }
+}
+
 async function switchToWorkspace(targetPath) {
   try {
     const res = await fetch("/api/workspace", {
@@ -432,6 +490,7 @@ async function switchToWorkspace(targetPath) {
     }
     const data = await res.json();
     currentWorkspaceName = data.name;
+    updateComposerMode();
     const labelEl = document.getElementById("workspace-label");
     if (labelEl) labelEl.textContent = data.name;
     const pathInput = document.getElementById("workspace-path-input");
@@ -465,6 +524,7 @@ async function initWorkspace() {
       if (!res.ok) return;
       const data = await res.json();
       currentWorkspaceName = data.active;
+      updateComposerMode();
       if (labelEl) labelEl.textContent = data.active || "workspace";
       if (pathInput) pathInput.value = data.active_path || "demo_vault";
       if (statusInfo) {
@@ -1070,6 +1130,40 @@ async function initMemory() {
   }
 }
 
+// Conversation memory per thread: sent with each request so follow-ups
+// ("now in C++") are understood. The server uses it in No-workspace mode.
+const HISTORY_TURN_CHARS = 4000;
+
+function activeThread() {
+  return activeThreadId ? threads.find(t => t.id === activeThreadId) : null;
+}
+
+function threadHistory() {
+  const t = activeThread();
+  return t && Array.isArray(t.history) ? t.history.slice(-12) : [];
+}
+
+function summarizeRun(data) {
+  const a = data.aegis || {};
+  if (data.status === "free") return a.text || "";
+  if (data.status === "blocked") return `Blocked: ${data.block_reason || data.abstain_reason || "forbidden by an active decision"}`;
+  if (data.status === "abstained") return `Declined: ${data.abstain_reason || "no decision covers this request"}`;
+  if (data.task_type === "explain_only") return a.text || "";
+  if (a.code) return `Proposed patch for ${data.target_file || "the workspace"}:\n\`\`\`python\n${a.code}\n\`\`\``;
+  return a.text || "";
+}
+
+function recordTurn(promptText, data) {
+  const t = activeThread();
+  if (!t) return;
+  if (!Array.isArray(t.history)) t.history = [];
+  const reply = summarizeRun(data).slice(0, HISTORY_TURN_CHARS);
+  t.history.push({ role: "user", content: promptText.slice(0, HISTORY_TURN_CHARS) });
+  if (reply) t.history.push({ role: "assistant", content: reply });
+  t.history = t.history.slice(-24);
+  saveThreads();
+}
+
 async function runWithPrompt(promptText, presetTitle = null) {
   document.getElementById("hero-view").style.display = "none";
   const messagesStream = document.getElementById("messages-stream");
@@ -1099,63 +1193,47 @@ async function runWithPrompt(promptText, presetTitle = null) {
   userMsg.innerHTML = `<div class="message-user-content">${escapeHtml(promptText)}</div>`;
   messagesStream.appendChild(userMsg);
 
-  // 2. Append Animated Assistant Thinking & Shimmering Code Skeleton
+  // 2. Live run card: steps, reasoning and output stream in as they happen
   const assistantMsg = document.createElement("div");
   assistantMsg.className = "message-assistant";
-  
+
   const startTime = Date.now();
   assistantMsg.innerHTML = `
-    <div class="thought-card expanded generating" id="current-thought-card">
-      <div class="thought-header">
-        <div class="thought-meta">
-          <span class="spinner-orb"></span>
-          <span id="loader-phase-title">Evaluating temporal graph with openJev Verdict v1.4...</span>
+    <div class="live-run" data-phase="route">
+      <div class="live-head">
+        <div class="live-title">
+          <span class="live-orb"></span>
+          <span class="live-phase" data-live="phase">Routing with Verdict v1.4…</span>
         </div>
-        <span class="loading-timer" id="loader-timer">0.0s</span>
-      </div>
-      <div class="thought-body" style="display: block;">
-        <div id="loader-steps-list" style="display: flex; flex-direction: column; gap: 7px; font-size: 12.5px;">
-          <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-cyan);" id="loader-step-row-1">
-            <span class="sparkle-mini">✦</span>
-            <span>System 1 (openJev ModernBERT): routing intent to leaf context...</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px; color: var(--text-muted);" id="loader-step-row-2">
-            <span>○</span>
-            <span>Checking bi-temporal graph &amp; superseded ADR closure bans...</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px; color: var(--text-muted);" id="loader-step-row-3">
-            <span>○</span>
-            <span>Loading local SLM weights into memory &amp; generating compliant patch...</span>
-          </div>
-        </div>
-        <div id="loader-reasoning-section" style="display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);">
-          <div class="reasoning-trace-label">
-            <span class="spinner-orb-mini"></span>
-            <span id="reasoning-status-text">Model Reasoning Trace</span>
-          </div>
-          <div class="reasoning-trace-box" id="loader-reasoning-box"></div>
+        <div class="live-stats">
+          <span class="live-stat" data-live="tokens" hidden></span>
+          <span class="live-stat" data-live="rate" hidden></span>
+          <span class="live-stat live-timer" data-live="timer">0.0s</span>
+          <button class="live-stop" data-live="stop" title="Stop generating (Esc)">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>
+            Stop
+          </button>
         </div>
       </div>
-    </div>
-
-    <!-- Shimmering Code Skeleton -->
-    <div class="skeleton-card" id="current-skeleton-card">
-      <div class="skeleton-header">
-        <div class="skeleton-status-text">
-          <span class="pulse-dot"></span>
-          <span id="skeleton-status-label">Synthesizing Compliant Architecture Patch</span>
-        </div>
-        <span class="skeleton-subtext">Unified Memory Engine Active</span>
+      <ol class="live-steps">
+        <li class="live-step active" data-step="1"><span class="live-step-dot"></span><span class="live-step-body"><span class="live-step-title">Route</span><span class="live-step-detail">Classifying intent</span></span></li>
+        <li class="live-step" data-step="2"><span class="live-step-dot"></span><span class="live-step-body"><span class="live-step-title">Govern</span><span class="live-step-detail">Checking decisions &amp; bans</span></span></li>
+        <li class="live-step" data-step="3"><span class="live-step-dot"></span><span class="live-step-body"><span class="live-step-title">Generate</span><span class="live-step-detail">Waiting for the model</span></span></li>
+      </ol>
+      <div class="live-thinking" data-live="think-wrap" hidden>
+        <button class="live-thinking-toggle" data-live="think-toggle" type="button">
+          <span class="live-think-dot"></span>
+          <span data-live="think-label">Thinking…</span>
+          <span class="live-think-chev">▾</span>
+        </button>
+        <div class="live-thinking-box" data-live="think"></div>
       </div>
-      <div class="skeleton-code-container">
-        <div class="skeleton-shimmer-bar" style="width: 48%;"></div>
-        <div class="skeleton-shimmer-bar" style="width: 78%; margin-left: 20px;"></div>
-        <div class="skeleton-shimmer-bar" style="width: 92%; margin-left: 20px;"></div>
-        <div class="skeleton-shimmer-bar" style="width: 65%; margin-left: 20px;"></div>
-        <div class="skeleton-shimmer-bar" style="width: 38%; margin-left: 20px;"></div>
-        <div class="skeleton-cursor-line">
-          <span class="typing-cursor"></span>
+      <div class="live-output">
+        <div class="live-output-head">
+          <span data-live="out-label">Output</span>
+          <span class="live-output-file" data-live="file"></span>
         </div>
+        <pre class="live-output-body" data-live="out"><span class="live-wait"><i></i><i></i><i></i><span>waiting for the first token</span></span></pre>
       </div>
     </div>
   `;
@@ -1164,12 +1242,126 @@ async function runWithPrompt(promptText, presetTitle = null) {
 
   document.getElementById("btn-run").disabled = true;
 
-  // Live stopwatch and phase transition ticker
+  const live = assistantMsg.querySelector(".live-run");
+  const $live = (key) => assistantMsg.querySelector(`[data-live="${key}"]`);
+  const setPhase = (phase, label) => {
+    live.dataset.phase = phase;
+    if (label) $live("phase").textContent = label;
+  };
+  const setStep = (n, state, detail) => {
+    const li = live.querySelector(`[data-step="${n}"]`);
+    if (!li) return;
+    li.className = `live-step ${state}`;
+    if (detail != null) li.querySelector(".live-step-detail").textContent = detail;
+  };
+
+  // Keep following the stream unless the user has scrolled up to read
+  const viewport = document.getElementById("chat-viewport");
+  const followStream = () => {
+    if (viewport && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 160) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" });
+    }
+  };
+
+  let modelName = "local model";
+  let thinkText = "";
+  let rawOut = "";
+  let tokenCount = 0;
+  let firstTokenAt = 0;
+  let lastTokenAt = 0;
+  let thinkStartedAt = 0;
+  let thinkEndedAt = 0;
+  let renderQueued = false;
+
+  const thinkWrap = $live("think-wrap");
+  const thinkBox = $live("think");
+  const outBox = $live("out");
+  $live("think-toggle").addEventListener("click", () => thinkWrap.classList.toggle("collapsed"));
+
+  // Visible output: hide <think> blocks and markdown fences, keep everything else verbatim
+  const visibleOutput = (text) => text
+    .replace(/<think>[\s\S]*?(<\/think>|$)/g, "")
+    .replace(/^\s*```[\w+#.-]*\s*$/gm, "")
+    .replace(/^\n+/, "")
+    .replace(/\s+$/, "");
+
+  const paint = () => {
+    renderQueued = false;
+    if (thinkText) {
+      const nearEnd = thinkBox.scrollHeight - thinkBox.scrollTop - thinkBox.clientHeight < 40;
+      thinkBox.textContent = thinkText;
+      if (nearEnd) thinkBox.scrollTop = thinkBox.scrollHeight;
+    }
+    const shown = visibleOutput(rawOut);
+    if (shown) {
+      const nearEnd = outBox.scrollHeight - outBox.scrollTop - outBox.clientHeight < 40;
+      outBox.textContent = shown;
+      const caret = document.createElement("span");
+      caret.className = "live-caret";
+      outBox.appendChild(caret);
+      if (nearEnd) outBox.scrollTop = outBox.scrollHeight;
+    }
+    followStream();
+  };
+  const queuePaint = () => {
+    if (!renderQueued) {
+      renderQueued = true;
+      requestAnimationFrame(paint);
+    }
+  };
+
+  const countToken = () => {
+    tokenCount++;
+    lastTokenAt = Date.now();
+    if (!firstTokenAt) firstTokenAt = lastTokenAt;
+  };
+
+  const startThinking = () => {
+    if (thinkStartedAt) return;
+    thinkStartedAt = Date.now();
+    thinkWrap.hidden = false;
+    setPhase("think", `Thinking with ${modelName}…`);
+    setStep(3, "active", "Reasoning before it writes");
+  };
+
+  const startWriting = () => {
+    if (live.dataset.phase === "write") return;
+    if (thinkStartedAt && !thinkEndedAt) {
+      thinkEndedAt = Date.now();
+      $live("think-label").textContent = `Thought for ${((thinkEndedAt - thinkStartedAt) / 1000).toFixed(1)}s`;
+      thinkWrap.classList.add("collapsed", "done");
+    }
+    setPhase("write", live.dataset.free ? `Answering with ${modelName}…` : `Writing the patch with ${modelName}…`);
+    setStep(3, "active", "Streaming output");
+  };
+
+  // Live stopwatch, token counter and speed
   const timerInterval = setInterval(() => {
-    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-    const timerEl = document.getElementById("loader-timer");
-    if (timerEl) timerEl.textContent = elapsedSec + "s";
+    $live("timer").textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
+    if (tokenCount) {
+      const tokEl = $live("tokens");
+      tokEl.hidden = false;
+      tokEl.textContent = `${tokenCount} tok`;
+      const secs = (lastTokenAt - firstTokenAt) / 1000;
+      if (secs > 0.5) {
+        const rateEl = $live("rate");
+        rateEl.hidden = false;
+        rateEl.textContent = `${(tokenCount / secs).toFixed(1)} tok/s`;
+      }
+    }
   }, 100);
+
+  // Stop button (and Esc) cancels the stream and keeps whatever arrived
+  const controller = new AbortController();
+  let stopped = false;
+  const stopRun = () => {
+    if (stopped) return;
+    stopped = true;
+    controller.abort();
+  };
+  $live("stop").addEventListener("click", stopRun);
+  const onEsc = (e) => { if (e.key === "Escape" && !document.querySelector(".modal-backdrop[style*='flex']")) stopRun(); };
+  document.addEventListener("keydown", onEsc);
 
   try {
     let data = null;
@@ -1177,7 +1369,8 @@ async function runWithPrompt(promptText, presetTitle = null) {
       const res = await fetch("/api/run/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText })
+        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive() }),
+        signal: controller.signal
       });
 
       if (res.ok && res.body) {
@@ -1197,61 +1390,57 @@ async function runWithPrompt(promptText, presetTitle = null) {
             if (!trimmed.startsWith("data: ")) continue;
             try {
               const evt = JSON.parse(trimmed.slice(6));
-              if (evt.type === "init" && evt.free) {
-                const step1 = document.getElementById("loader-step-row-1");
-                if (step1) {
-                  step1.innerHTML = `<span class="sparkle-mini">✓</span><span>No workspace attached: ADR checks off</span>`;
-                  step1.style.color = "var(--text-muted)";
+              if (evt.type === "init") {
+                modelName = evt.model || modelName;
+                if (evt.free) {
+                  live.dataset.free = "1";
+                  setStep(1, "done skipped", "No workspace attached");
+                  setStep(2, "done skipped", evt.web_search ? "Checks off · web search on" : `Checks off${evt.history_turns ? ` · ${evt.history_turns} earlier turns` : ""}`);
+                  $live("out-label").textContent = "Answer";
+                  outBox.classList.add("prose");
+                } else {
+                  const policy = evt.policy && evt.policy.primary_id ? evt.policy.primary_id.replace(/^adr:/, "") : "no decision";
+                  const s1 = evt.verdict && evt.verdict.system1_ms ? ` · ${Math.round(evt.verdict.system1_ms)}ms` : "";
+                  setStep(1, "done", `Matched ${policy}${s1}`);
+                  const negs = evt.negative || [];
+                  const bans = negs.reduce((n, neg) => n + ((neg.literals || []).length), 0);
+                  setStep(2, "done", bans ? `Clear of ${bans} banned patterns` : "No bans in scope");
+                  $live("out-label").textContent = "Patch draft";
+                  if (evt.target_file) $live("file").textContent = evt.target_file;
                 }
-                const step2 = document.getElementById("loader-step-row-2");
-                if (step2) {
-                  step2.innerHTML = `<span class="sparkle-mini">✓</span><span>Sending request straight to the local model</span>`;
-                  step2.style.color = "var(--text-muted)";
-                }
-                const step3 = document.getElementById("loader-step-row-3");
-                if (step3) {
-                  step3.innerHTML = `<span class="spinner-orb-mini"></span><span>Streaming from ${escapeHtml(evt.model || "local model")}...</span>`;
-                  step3.style.color = "var(--accent-cyan)";
-                }
-                const phaseTitle = document.getElementById("loader-phase-title");
-                if (phaseTitle) phaseTitle.textContent = `Answering with ${evt.model || "local model"}...`;
-                const skeletonLabel = document.getElementById("skeleton-status-label");
-                if (skeletonLabel) skeletonLabel.textContent = "Streaming answer...";
-              } else if (evt.type === "init") {
-                const step1 = document.getElementById("loader-step-row-1");
-                if (step1 && evt.verdict) {
-                  step1.innerHTML = `<span class="sparkle-mini">✓</span><span>System 1 (Verdict v1.4): matched ${escapeHtml(evt.policy ? evt.policy.primary_id : "policy")} in ${Math.round(evt.verdict.latency_ms || 32)}ms</span>`;
-                  step1.style.color = "var(--accent-green)";
-                }
-                const step2 = document.getElementById("loader-step-row-2");
-                if (step2) {
-                  step2.innerHTML = `<span class="sparkle-mini">✓</span><span>Temporal graph verified: 0 bans violated</span>`;
-                  step2.style.color = "var(--accent-green)";
-                }
-                const step3 = document.getElementById("loader-step-row-3");
-                if (step3) {
-                  step3.innerHTML = `<span class="spinner-orb-mini"></span><span>Streaming reasoning &amp; synthesis via ${escapeHtml(evt.model || "local model")}...</span>`;
-                  step3.style.color = "var(--accent-cyan)";
-                }
-                const phaseTitle = document.getElementById("loader-phase-title");
-                if (phaseTitle) phaseTitle.textContent = `Reasoning with ${evt.model || "local model"}...`;
-                const skeletonLabel = document.getElementById("skeleton-status-label");
-                if (skeletonLabel) skeletonLabel.textContent = `Streaming Reasoning & Synthesis...`;
+                setStep(3, "active", `Loading ${modelName}`);
+                setPhase("wait", `Waiting for ${modelName}…`);
+              } else if (evt.type === "search") {
+                const msg = {
+                  searching: "Searching the web…",
+                  ok: `${evt.count} web results via ${evt.provider}`,
+                  offline: "Offline · answering locally",
+                  unavailable: "Search unavailable · answering locally",
+                  disabled: "Search disabled · answering locally",
+                }[evt.status] || "Web search finished";
+                setStep(2, evt.status === "searching" ? "active" : "done", msg);
               } else if (evt.type === "thinking") {
-                const sec = document.getElementById("loader-reasoning-section");
-                if (sec) sec.style.display = "block";
-                const box = document.getElementById("loader-reasoning-box");
-                if (box) {
-                  box.textContent += evt.chunk;
-                  box.scrollTop = box.scrollHeight;
-                }
+                countToken();
+                startThinking();
+                thinkText += evt.chunk;
+                queuePaint();
               } else if (evt.type === "response") {
-                const statusText = document.getElementById("reasoning-status-text");
-                if (statusText) statusText.textContent = "✓ Reasoning Complete · Synthesizing Code";
-                const phaseTitle = document.getElementById("loader-phase-title");
-                if (phaseTitle) phaseTitle.textContent = "Streaming compliant patch...";
-                const skeletonLabel = document.getElementById("skeleton-status-label");
-                if (skeletonLabel) skeletonLabel.textContent = "Synthesizing Compliant Architecture Patch...";
+                countToken();
+                rawOut += evt.chunk;
+                // Models that inline <think> tags: route that text to the thinking panel
+                const openThink = rawOut.lastIndexOf("<think>") > rawOut.lastIndexOf("</think>");
+                if (openThink) {
+                  startThinking();
+                  const m = rawOut.match(/<think>([\s\S]*)$/);
+                  thinkText = m ? m[1] : thinkText;
+                } else if (visibleOutput(rawOut).trim()) {
+                  if (rawOut.includes("</think>") && !thinkText) {
+                    const m = rawOut.match(/<think>([\s\S]*?)<\/think>/);
+                    if (m) { startThinking(); thinkText = m[1]; }
+                  }
+                  startWriting();
+                }
+                queuePaint();
               } else if (evt.type === "finished") {
                 data = evt;
               }
@@ -1262,14 +1451,26 @@ async function runWithPrompt(promptText, presetTitle = null) {
         }
       }
     } catch (streamErr) {
-      console.warn("Streaming request failed, falling back to /api/run:", streamErr);
+      if (!stopped) console.warn("Streaming request failed, falling back to /api/run:", streamErr);
+    }
+
+    if (stopped && !data) {
+      live.classList.add("stopped");
+      setPhase("stopped", "Stopped");
+      setStep(3, "done skipped", tokenCount ? `Stopped after ${tokenCount} tokens` : "Stopped before output");
+      const caret = outBox.querySelector(".live-caret");
+      if (caret) caret.remove();
+      if (!visibleOutput(rawOut)) outBox.innerHTML = '<span class="live-empty">Nothing was generated.</span>';
+      $live("stop").remove();
+      snapshotActiveThread();
+      return;
     }
 
     if (!data) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText })
+        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive() })
       });
       data = await res.json();
     }
@@ -1286,6 +1487,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
 
     // Render response into assistantMsg
     renderAssistantResponse(assistantMsg, data, promptText);
+    recordTurn(promptText, data);
 
     if (currentAppMode === "diff") {
       const diffView = document.getElementById("diff-inspector-view");
@@ -1296,8 +1498,50 @@ async function runWithPrompt(promptText, presetTitle = null) {
     assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">Execution Error</span><span>${escapeHtml(e.message)}</span></div>`;
   } finally {
     clearInterval(timerInterval);
+    document.removeEventListener("keydown", onEsc);
     document.getElementById("btn-run").disabled = false;
   }
+}
+
+// Minimal Markdown for model answers. Everything is escaped first, then only
+// fences, inline code, headings, bold and list bullets are turned into markup.
+function renderMarkdownLite(text) {
+  const parts = String(text || "").split(/```([\w+#.-]*)[^\n]*\n?([\s\S]*?)(?:```|$)/g);
+  let html = "";
+  for (let i = 0; i < parts.length; i += 3) {
+    let prose = escapeHtml(parts[i] || "");
+    prose = prose
+      .replace(/^#{1,6}\s+(.+)$/gm, '<strong style="display:block; margin:10px 0 2px;">$1</strong>')
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`\n]+)`/g, '<code style="font-family:var(--font-mono); font-size:0.92em; padding:1px 5px; border-radius:5px; background:var(--code-file-bg, rgba(0,0,0,0.06));">$1</code>')
+      .replace(/^\s*[-*]\s+/gm, "• ");
+    html += prose;
+    if (i + 2 < parts.length) {
+      const lang = parts[i + 1] ? `<div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(parts[i + 1])}</div>` : "";
+      html += `<div style="margin:10px 0;">${lang}<pre style="margin:0; padding:12px 14px; border-radius:10px; overflow-x:auto; white-space:pre; font-family:var(--font-mono); font-size:13px; line-height:1.55; background:var(--code-file-bg, rgba(0,0,0,0.05));"><code>${escapeHtml((parts[i + 2] || "").replace(/\n$/, ""))}</code></pre></div>`;
+    }
+  }
+  return html;
+}
+
+function renderWebSources(web) {
+  if (!web || !web.requested) return "";
+  const note = {
+    ok: `Searched the web via ${escapeHtml(web.provider || "search")}`,
+    offline: "Offline: no internet connection, so this answer comes from the local model only.",
+    unavailable: "Web search was unavailable, so this answer comes from the local model only.",
+    disabled: "Web search is disabled in .aegis/config.json, so this answer comes from the local model only.",
+  }[web.status] || "";
+  const items = (web.results || []).map((r, i) => {
+    const url = /^https?:\/\//i.test(r.url || "") ? r.url : "";
+    const title = escapeHtml(r.title || url);
+    return `<li style="margin:3px 0;">[${i + 1}] ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}</li>`;
+  }).join("");
+  return `
+    <div style="margin:0 20px 14px; padding:10px 12px; border-radius:10px; font-size:12.5px; color:var(--text-muted); background:var(--code-file-bg, rgba(0,0,0,0.04));">
+      <div style="font-weight:600; margin-bottom:${items ? "4px" : "0"};">${note}</div>
+      ${items ? `<ol style="margin:0; padding-left:0; list-style:none; word-break:break-all;">${items}</ol>` : ""}
+    </div>`;
 }
 
 function renderFreeResponse(container, data) {
@@ -1318,10 +1562,11 @@ function renderFreeResponse(container, data) {
       <span class="code-meta">${escapeHtml(data.model || "local model")} &middot; ${Math.round(a.latency_ms || 0)}ms</span>
     </div>
     ${reasoning}
-    <div class="explain-body">${escapeHtml(a.text || "No answer returned")}</div>
+    <div class="explain-body">${a.text ? renderMarkdownLite(a.text) : "No answer returned"}</div>
+    ${renderWebSources(data.web)}
     <div class="unified-card-footer">
       <span style="font-size:12.5px; color:var(--text-muted);">
-        No ADRs, bans or habits were applied and nothing was written to disk. Attach a workspace to turn governance back on.
+        No ADRs, bans or habits were applied and nothing was written to disk${data.web && data.web.status === "ok" ? "; your message was sent to a search engine" : ""}. Attach a workspace to turn governance back on.
       </span>
     </div>
   `;
@@ -1339,7 +1584,7 @@ function renderAssistantResponse(container, data, promptText) {
   }
 
   // 1. Thought Accordion (DeepSeek/ChatGPT style)
-  const vLat = data.verdict && data.verdict.latency_ms > 0 ? Math.round(data.verdict.latency_ms) : 32;
+  const vLat = data.verdict ? Math.round(data.verdict.system1_ms || data.verdict.latency_ms || 0) : 0;
   const aLat = data.aegis && data.aegis.latency_ms > 0 ? Math.round(data.aegis.latency_ms) : 0;
   const totalMs = vLat + aLat;
   const thoughtTimeStr = totalMs >= 1000 ? (totalMs / 1000).toFixed(1) + "s" : `${totalMs}ms`;
@@ -1474,7 +1719,7 @@ function renderAssistantResponse(container, data, promptText) {
         <span class="code-meta">${Math.round(data.aegis ? data.aegis.latency_ms : 0)} ms</span>
       </div>
       <div class="explain-body">
-        ${escapeHtml(data.aegis ? data.aegis.text : "No explanation returned")}
+        ${data.aegis && data.aegis.text ? renderMarkdownLite(data.aegis.text) : "No explanation returned"}
       </div>
     `;
     container.appendChild(explainCard);
@@ -1494,7 +1739,9 @@ function renderAssistantResponse(container, data, promptText) {
   codeCard.dataset.aegisDiff = aegisDiff;
   codeCard.dataset.baselineDiff = baselineDiff;
   codeCard.dataset.aegisMeta = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
-  codeCard.dataset.baselineMeta = `Raw Baseline: ${data.tokens ? data.tokens.baseline : 0} tokens · ${Math.round(data.baseline ? data.baseline.latency_ms : 0)}ms`;
+  codeCard.dataset.baselineMeta = data.baseline && data.baseline.source === "model"
+    ? `Raw Baseline: ${data.tokens ? data.tokens.baseline : "n/a"} tokens · ${Math.round(data.baseline.latency_ms || 0)}ms`
+    : `Legacy pattern (illustrative) · full-repo prompt ${data.tokens ? data.tokens.baseline : "n/a"} tokens`;
 
   const chunks = parseDiffToChunks(aegisDiff, data.aegis ? data.aegis.code : "");
 
@@ -1546,7 +1793,7 @@ function renderAssistantResponse(container, data, promptText) {
     </div>
     ${editorHtml}
     <div class="unified-card-footer">
-      <span id="review-status-msg" style="font-size:12.5px; color:var(--text-muted);">${isUnparseable ? "Unparseable output - cannot commit." : "Ready to commit via FastMCP."}</span>
+      <span id="review-status-msg" style="font-size:12.5px; color:var(--text-muted);">${isUnparseable ? "Unparseable output - cannot commit." : "Ready to commit with apply_patch, the same tool the MCP server exposes."}</span>
       <button class="btn-approve" id="btn-approve-action" ${isUnparseable ? "disabled" : ""}>Approve &amp; Commit</button>
     </div>
   `;
@@ -2063,21 +2310,6 @@ function setAppMode(mode) {
 function renderDiffInspectorContent(container) {
   if (!container) return;
 
-  // Resolve latestRunData from active messages if not set
-  if (!latestRunData) {
-    const activeCard = document.querySelector("#messages-stream .code-card");
-    if (activeCard && activeCard.dataset.aegisDiff) {
-      latestRunData = {
-        aegis: { diff: activeCard.dataset.aegisDiff, code: activeCard.dataset.aegisDiff, latency_ms: 120 },
-        baseline: { diff: activeCard.dataset.baselineDiff, code: activeCard.dataset.baselineDiff, latency_ms: 3200 },
-        tokens: { leaf: 562, baseline: 1180 },
-        policy: { primary_id: "ADR-014" },
-        target_file: "vault/store.py",
-        task_type: "implement_production"
-      };
-    }
-  }
-
   if (!latestRunData || (!latestRunData.aegis && !latestRunData.baseline)) {
     container.innerHTML = `
       <div class="diff-inspector-empty">
@@ -2108,27 +2340,17 @@ function renderDiffInspectorContent(container) {
 
   const d = latestRunData;
   const aegisDiff = d.aegis ? (d.aegis.diff || d.aegis.code || d.aegis.text) : "";
-  let baselineDiff = d.baseline ? (d.baseline.diff || d.baseline.code || d.baseline.text) : "";
-  if (!baselineDiff) {
-    const tf = (d.target_file || "vault/store.py").toLowerCase();
-    if (tf.includes("crypto")) {
-      baselineDiff = `--- a/vault/crypto.py\n+++ b/vault/crypto.py\n@@ -1,3 +1,4 @@\n def encrypt_rsa_payload(public_key, plaintext: bytes) -> bytes:\n-    raise NotImplementedError("encrypt_rsa_payload is not implemented")\n+    return public_key.encrypt(\n+        plaintext,\n+        padding.PKCS1v15()\n+    )`;
-    } else if (tf.includes("schema")) {
-      baselineDiff = `--- a/vault/schemas.py\n+++ b/vault/schemas.py\n@@ -1,2 +1,2 @@\n def serialize_vault_payload(model) -> dict:\n-    raise NotImplementedError("serialize_vault_payload is not implemented")\n+    return model.dict()`;
-    } else if (tf.includes("db")) {
-      baselineDiff = `--- a/vault/db.py\n+++ b/vault/db.py\n@@ -1,2 +1,2 @@\n def query_audit_trail(session, user_id: str):\n-    raise NotImplementedError("query_audit_trail is not implemented")\n+    return engine.execute(f"SELECT * FROM audit_logs WHERE user_id = '{user_id}'")`;
-    } else {
-      baselineDiff = `--- a/vault/store.py\n+++ b/vault/store.py\n@@ -1,2 +1,2 @@\n def persist_session_token(token: str) -> str:\n-    raise NotImplementedError("persist_session_token is not implemented")\n+    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)`;
-    }
-  }
-  const policyId = (d.policy && d.policy.primary_id) || "ADR-014";
-  const leafTokens = (d.tokens && d.tokens.leaf) || 562;
-  const baselineTokens = (d.tokens && d.tokens.baseline) || 1180;
-  const compressionPct = baselineTokens > 0
+  const baselineDiff = d.baseline ? (d.baseline.diff || d.baseline.code || d.baseline.text) : "";
+  const baselineIsTemplate = !d.baseline || d.baseline.source !== "model";
+  const policyId = (d.policy && d.policy.primary_id) || "no decision";
+  const leafTokens = d.tokens && d.tokens.leaf ? d.tokens.leaf : null;
+  const baselineTokens = d.tokens && d.tokens.baseline ? d.tokens.baseline : null;
+  const compressionPct = leafTokens && baselineTokens
     ? Math.round(((baselineTokens - leafTokens) / baselineTokens) * 100)
-    : 55;
-  const targetFile = d.target_file || "vault/store.py";
-  const latMs = d.verdict && d.verdict.latency_ms > 0 ? Math.round(d.verdict.latency_ms) : 32;
+    : null;
+  const targetFile = d.target_file || "(no target)";
+  const s1Ms = d.verdict ? Math.round(d.verdict.system1_ms || d.verdict.latency_ms || 0) : 0;
+  const tok = (n) => (n ? `${n} tokens` : "n/a");
 
   container.innerHTML = `
     <div class="diff-inspector-header">
@@ -2140,9 +2362,9 @@ function renderDiffInspectorContent(container) {
         </span>
       </div>
       <div class="diff-inspector-meta-pills">
-        <span class="diff-inspector-pill">Baseline: ${baselineTokens} tokens</span>
-        <span class="diff-inspector-pill highlight">ClearSky: ${leafTokens} tokens (-${compressionPct}%)</span>
-        <span class="diff-inspector-pill">Verdict: ~${latMs}ms</span>
+        <span class="diff-inspector-pill">Full-repo prompt: ${tok(baselineTokens)}</span>
+        <span class="diff-inspector-pill highlight">ClearSky prompt: ${tok(leafTokens)}${compressionPct !== null ? ` (-${compressionPct}%)` : ""}</span>
+        <span class="diff-inspector-pill">System 1: ${s1Ms ? `${s1Ms}ms` : "n/a"}</span>
         <button class="diff-return-chat-btn" id="btn-inspector-to-chat">← Back to chat</button>
       </div>
     </div>
@@ -2151,10 +2373,10 @@ function renderDiffInspectorContent(container) {
       <div class="diff-pane baseline">
         <div class="diff-pane-header">
           <div class="diff-pane-title">
-            <span>Ungoverned baseline</span>
-            <span class="diff-pane-badge">May revive banned code</span>
+            <span>${baselineIsTemplate ? "Legacy pattern" : "Ungoverned baseline"}</span>
+            <span class="diff-pane-badge">${baselineIsTemplate ? "Illustrative, not a model run" : "Model output, full repo context"}</span>
           </div>
-          <span class="code-meta">${baselineTokens} tokens</span>
+          <span class="code-meta">${tok(baselineTokens)}</span>
         </div>
         <div class="diff-pane-content" id="inspector-baseline-diff"></div>
       </div>
@@ -2165,7 +2387,7 @@ function renderDiffInspectorContent(container) {
             <span>ClearSky patch</span>
             <span class="diff-pane-badge">Policy compliant</span>
           </div>
-          <span class="code-meta">${leafTokens} tokens &middot; -${compressionPct}%</span>
+          <span class="code-meta">${tok(leafTokens)}${compressionPct !== null ? ` &middot; -${compressionPct}%` : ""}</span>
         </div>
         <div class="diff-pane-content" id="inspector-aegis-diff"></div>
       </div>

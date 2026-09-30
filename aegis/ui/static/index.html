@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=3.5">
+  <link rel="stylesheet" href="style.css?v=3.7">
 </head>
 <body>
 
@@ -233,9 +233,9 @@
                 <span id="workspace-label">demo_vault</span>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
-              <div class="toolbar-pill">
+              <div class="toolbar-pill" id="policy-pill">
                 <span class="sparkle-mini">✦</span>
-                <span>Policy gate on</span>
+                <span id="policy-pill-text">Policy gate on</span>
               </div>
             </div>
 
@@ -247,7 +247,7 @@
             </div>
           </div>
         </div>
-        <div class="input-footer-note">
+        <div class="input-footer-note" id="input-footer-note">
           Runs entirely on this machine. No prompts, code, or telemetry reach a cloud API.
         </div>
       </footer>
@@ -464,6 +464,6 @@
 
   </div>
 
-  <script src="app.js?v=3.2"></script>
+  <script src="app.js?v=3.4"></script>
 </body>
 </html>
