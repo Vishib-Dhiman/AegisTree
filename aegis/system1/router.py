@@ -15,6 +15,7 @@ from aegis.core.config import SystemConfig
 from aegis.core.models import ChoiceOption, ChoiceQuery, GraphNode, NodeType
 from aegis.system1.engine import DecisionEngine, EngineUnavailable
 from aegis.system1.graph import MemoryGraph
+from aegis.system1.policy_guard import find_forbidden, strongest_revival
 from aegis.system1.verdict_engine import VerdictDecisionEngine
 
 
@@ -23,24 +24,54 @@ STOPWORDS: Set[str] = {
     "from", "into", "you", "your", "are", "was", "not", "adr",
 }
 
+# Wording chosen on scripts/data/system1_eval.json (dev split); see scripts/calibrate_system1.py.
 TASK_OPTIONS = [
     ChoiceOption(
         id="implement_production",
-        description="a request to add or change production code that stores or rotates session tokens",
+        description="a request to build, change, or fix a feature in the code",
     ),
     ChoiceOption(
         id="explain_only",
-        description="a request for an explanation with no file edits",
+        description="a question asking for an explanation, with no code changes",
     ),
     ChoiceOption(
         id="edit_tests",
-        description="a request to change files under the tests directory",
+        description="a request to write, fix, or change unit tests or test fixtures",
     ),
     ChoiceOption(
         id="write_adr",
-        description="a request to record a new architecture decision rather than edit code",
+        description="a request to create a new decision record, not to change code or explain an existing one",
     ),
 ]
+
+ABSTAIN_ID = "__insufficient_evidence__"
+
+
+def build_context(prompt: str, workspace_root: Union[str, Path]) -> str:
+    """Context sent to System 1, naming whichever workspace is active."""
+    name = Path(workspace_root).resolve().name.replace("_", " ").replace("-", " ")
+    return f"Repository: {name}.\nThe user said: {prompt}"
+
+
+def relative_confidence(probabilities: Dict[str, float], selected_id: str, option_ids: Set[str]) -> float:
+    """Probability of selected_id renormalised over the real options.
+
+    Verdict always reserves mass for its insufficient-evidence option, which
+    routinely takes 25-40% on short developer prompts and drags the raw top
+    probability below any useful threshold. For routing we only need to know
+    how decisively the model prefers one real option over the others.
+    """
+    total = sum(v for k, v in probabilities.items() if k in option_ids)
+    if total <= 0:
+        return 0.0
+    return probabilities.get(selected_id, 0.0) / total
+
+
+def best_option(probabilities: Dict[str, float], option_ids: Set[str]) -> Optional[str]:
+    candidates = {k: v for k, v in probabilities.items() if k in option_ids}
+    if not candidates:
+        return None
+    return max(candidates, key=candidates.get)
 
 
 class RouteResult(BaseModel):
@@ -62,6 +93,9 @@ class RouteResult(BaseModel):
     draft_adr: Optional[str] = None
     blocked_literal: Optional[str] = None
     blocking_policy_id: Optional[str] = None
+    block_method: Optional[Literal["literal", "semantic"]] = None
+    block_confidence: Optional[float] = None
+    revived_policy_id: Optional[str] = None
 
 
 class BlockResult(BaseModel):
@@ -79,7 +113,6 @@ def check_forbidden_request(
     if task_type != "implement_production":
         return None
 
-    prompt_lower = prompt.lower()
     banned = []
 
     for policy in active_policies:
@@ -99,7 +132,7 @@ def check_forbidden_request(
             })
 
     for item in banned:
-        if item["literal"].lower() in prompt_lower:
+        if find_forbidden(prompt, [item["literal"]]):
             return BlockResult(
                 literal=item["literal"],
                 source_policy_id=item["source_policy_id"],
@@ -185,7 +218,7 @@ class Router:
 
         if self.engine is not None:
             try:
-                context = f"Repository: Northwind session vault.\nThe user said: {prompt}"
+                context = build_context(prompt, root)
                 query = ChoiceQuery(
                     id="task_classification",
                     question="What type of action is the user requesting?",
@@ -195,16 +228,15 @@ class Router:
                 t_start = time.perf_counter()
                 res = self.engine.evaluate_choice(context=context, query=query)
                 verdict_lat = (time.perf_counter() - t_start) * 1000.0
-                verdict_task_id = res.selected_id
-                verdict_conf = res.confidence
+                valid_ids = {o.id for o in TASK_OPTIONS}
+                verdict_task_id = best_option(res.probabilities, valid_ids) or res.selected_id
+                verdict_conf = relative_confidence(res.probabilities, verdict_task_id, valid_ids)
 
-                valid_ids = {"implement_production", "explain_only", "edit_tests", "write_adr"}
                 if (
-                    not res.is_abstention
-                    and res.selected_id in valid_ids
-                    and res.confidence >= self.config.system1_confidence_threshold
+                    verdict_task_id in valid_ids
+                    and verdict_conf >= self.config.system1_confidence_threshold
                 ):
-                    task_type = res.selected_id
+                    task_type = verdict_task_id
                     task_source = "verdict"
                 else:
                     task_type = keyword_task
@@ -378,16 +410,14 @@ class Router:
                         options=options,
                         allow_abstention=True,
                     )
-                    vres = self.engine.evaluate_choice(context=context, query=q)
+                    vres = self.engine.evaluate_choice(context=build_context(prompt, root), query=q)
                     candidate_ids = {c.id for c in candidates}
-                    if (
-                        not vres.is_abstention
-                        and vres.selected_id in candidate_ids
-                        and vres.confidence >= self.config.system1_confidence_threshold
-                    ):
-                        primary_policy_id = vres.selected_id
+                    picked = best_option(vres.probabilities, candidate_ids)
+                    picked_conf = relative_confidence(vres.probabilities, picked, candidate_ids) if picked else 0.0
+                    if picked and picked_conf >= self.config.system1_confidence_threshold:
+                        primary_policy_id = picked
                         policy_source = "verdict"
-                        policy_conf = vres.confidence
+                        policy_conf = picked_conf
                     else:
                         primary_policy_id = winner_node.id
                 except Exception:
@@ -397,11 +427,11 @@ class Router:
 
         # 6. Closure (one hop supersedes edges from active_policy_ids to target nodes)
         negative_nodes: List[GraphNode] = []
-        seen_neg = set()
+        superseded_by: Dict[str, str] = {}
         for pol_id in active_policy_ids:
             for succ in self.graph.successors(pol_id, relation="supersedes"):
-                if succ.id not in seen_neg:
-                    seen_neg.add(succ.id)
+                if succ.id not in superseded_by:
+                    superseded_by[succ.id] = pol_id
                     negative_nodes.append(succ)
 
         # 7. Check for forbidden literal requests in production implementation
@@ -431,7 +461,39 @@ class Router:
                 abstain_reason=block.reason,
                 blocked_literal=block.literal,
                 blocking_policy_id=block.source_policy_id,
+                block_method="literal",
             )
+
+        # 8. Paraphrased requests for a superseded decision ("the old wrap cipher")
+        if task_type == "implement_production":
+            revival = strongest_revival(self.engine, prompt, root, negative_nodes)
+            if revival and revival[1] >= self.config.system1_revival_threshold:
+                revived, prob = revival
+                enforcing_id = superseded_by[revived.id]
+                return RouteResult(
+                    status="blocked",
+                    task_type=task_type,
+                    task_source=task_source,
+                    verdict_task_id=verdict_task_id,
+                    verdict_confidence=verdict_conf,
+                    verdict_latency_ms=verdict_lat,
+                    verdict_error=verdict_err,
+                    primary_policy_id=primary_policy_id,
+                    policy_source=policy_source,
+                    policy_confidence=policy_conf,
+                    active_policy_ids=active_policy_ids,
+                    negative_nodes=negative_nodes,
+                    habits=active_habits,
+                    excluded_files=excluded_files,
+                    abstain_reason=(
+                        f"Action blocked: request asks for superseded decision {revived.id} "
+                        f"(System 1 revival probability {prob:.2f}), replaced by active policy {enforcing_id}."
+                    ),
+                    blocking_policy_id=enforcing_id,
+                    block_method="semantic",
+                    block_confidence=prob,
+                    revived_policy_id=revived.id,
+                )
 
         return RouteResult(
             status="ready",

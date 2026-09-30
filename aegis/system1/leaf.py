@@ -161,8 +161,8 @@ def compile_leaf(
         f"{current_source}\n\n"
         "ALLOWED HELPER, already in the repo:\n"
         f"{seal_source}\n\n"
-        "If a habit specifies retries, use that value; otherwise retries=3.\n"
-        "If a habit specifies timeout_s, use that value.\n\n"
+        "Habits come from human edits to earlier patches: when a habit sets an argument\n"
+        "on a call you make, use exactly that value. Without a retries habit, use retries=3.\n\n"
         "USER REQUEST:\n"
         f"{prompt}"
     )

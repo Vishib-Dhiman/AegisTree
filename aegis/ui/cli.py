@@ -99,8 +99,12 @@ def run_prompt_workflow(prompt_text: str):
     if route.status == "blocked":
         console.print(Panel(
             f"[bold red]SOVEREIGN REFUSAL ACTIVATED[/bold red]\n"
-            f"Blocked Literal: [bold yellow]{route.blocked_literal}[/bold yellow]\n"
-            f"Attributed Policy: [bold yellow]{route.blocking_policy_id}[/bold yellow]\n\n"
+            + (
+                f"Revived Decision: [bold yellow]{route.revived_policy_id}[/bold yellow] (p={route.block_confidence:.2f})\n"
+                if route.block_method == "semantic"
+                else f"Blocked Literal: [bold yellow]{route.blocked_literal}[/bold yellow]\n"
+            )
+            + f"Attributed Policy: [bold yellow]{route.blocking_policy_id}[/bold yellow]\n\n"
             f"AegisTree physically blocked code generation because the prompt requests an architectural pattern "
             f"strictly superseded in {route.blocking_policy_id}.",
             title="[bold red]Policy Violation Intercepted[/bold red]",

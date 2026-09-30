@@ -67,7 +67,11 @@ def test_e2e_pitch_demo_standard_flow(clean_sandbox):
     compression_ratio = (baseline_tokens - leaf_tokens) / baseline_tokens
     assert compression_ratio > 0.55
 
-    # 3. Patch application and memory habit synthesis
+    # 3. Patch application and memory habit synthesis (reviewer edits retries=3 -> 1)
+    model_code = (
+        "def persist_session_token(token: str) -> str:\n"
+        "    return aegis_seal(token, key_id='kek-2026', timeout_s=5.0, retries=3)"
+    )
     approved_code = (
         "def persist_session_token(token: str) -> str:\n"
         "    return aegis_seal(token, key_id='kek-2026', timeout_s=5.0, retries=1)"
@@ -78,7 +82,7 @@ def test_e2e_pitch_demo_standard_flow(clean_sandbox):
         approved_code=approved_code,
         approved=True,
         workspace_root=repo_dir,
-        model_output=approved_code,
+        model_output=model_code,
         prompt=prompt,
         leaf_text=leaf_text,
         baseline_text=baseline_text,

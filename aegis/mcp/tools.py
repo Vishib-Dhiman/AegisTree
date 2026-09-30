@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from aegis.core.models import NodeType
-from aegis.mcp.feedback import extract_habit_details, extract_habit_label, replace_function_source
+from aegis.mcp.feedback import extract_habits, replace_function_source
 from aegis.system1.graph import MemoryGraph
+from aegis.system1.policy_guard import find_forbidden
 from aegis.system1.leaf import extract_function_source, select_function_name, select_target
 from aegis.system1.router import RouteResult, tokenize_text
 from aegis.system2.prompt import compute_unified_diff, extract_code
@@ -91,7 +92,7 @@ def propose_patch(
     for neg in route.negative_nodes:
         forbidden_literals.update(neg.forbidden_literals)
 
-    present_forbidden = [lit for lit in sorted(forbidden_literals) if lit in clean_code]
+    present_forbidden = find_forbidden(clean_code, sorted(forbidden_literals))
 
     return {
         "target_path": str(target_path),
@@ -150,7 +151,7 @@ def apply_patch(
                 banned.update(pol.forbidden_literals)
         for neg in route.negative_nodes:
             banned.update(neg.forbidden_literals)
-        present_banned = [b for b in banned if b in clean_code]
+        present_banned = find_forbidden(clean_code, sorted(banned))
         if present_banned:
             # If legacy_wrap is in present_banned, prioritize it
             b = "legacy_wrap" if "legacy_wrap" in present_banned else sorted(present_banned)[0]
@@ -183,12 +184,13 @@ def apply_patch(
     else:
         target_file.write_text(clean_code, encoding="utf-8")
 
-    # 5. Extract habit
-    habit_details = extract_habit_details(model_output, clean_code)
-    habit_label = habit_details["label"] if habit_details else None
-    habit_node = None
-    if habit_label:
-        habit_node = graph.add_habit(habit_label, metadata=habit_details)
+    # 5. Learn habits from what the reviewer changed in the model's patch
+    habit_nodes = []
+    if model_output.strip():
+        for details in extract_habits(extract_code(model_output), clean_code):
+            habit_nodes.append(graph.add_habit(details["label"], metadata=details))
+    habit_node = habit_nodes[0] if habit_nodes else None
+    habit_label = "; ".join(h.label for h in habit_nodes) or None
 
     # 6. Store receipt
     receipt_id = graph.add_receipt(
@@ -210,4 +212,5 @@ def apply_patch(
         "receipt_id": receipt_id,
         "habit_id": habit_node.id if habit_node else None,
         "habit_label": habit_label,
+        "habit_ids": [h.id for h in habit_nodes],
     }

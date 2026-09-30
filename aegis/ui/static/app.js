@@ -1238,7 +1238,9 @@ function renderAssistantResponse(container, data, promptText) {
         ACTION BLOCKED &mdash; SOVEREIGN REFUSAL
       </div>
       <div style="font-size: 13.5px; line-height: 1.6; color: #fff;">
-        <code>${escapeHtml(data.blocked_literal || "")}</code> is forbidden by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>.
+        ${data.block_method === "semantic"
+          ? `Request asks for superseded decision <code>${escapeHtml(data.revived_policy_id || "")}</code>, replaced by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>. <span style="color:#fca5a5;">(System 1 revival check, p=${(data.block_confidence || 0).toFixed(2)})</span>`
+          : `<code>${escapeHtml(data.blocked_literal || "")}</code> is forbidden by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>.`}
       </div>
       <div style="font-size: 12.5px; color: #fca5a5;">
         ClearSky physically blocked generation before model invocation because this architectural pattern has been superseded. Zero tokens wasted.

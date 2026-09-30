@@ -52,7 +52,9 @@ SYSTEM2_CATALOG = {
 
 class SystemConfig(BaseModel):
     system1_engine: str = "verdict_v1.4"
-    system1_confidence_threshold: float = 0.55
+    system1_confidence_threshold: float = 0.5
+    # Revival checks below this stay unblocked; output-side literal checks still apply
+    system1_revival_threshold: float = 0.7
     system2_model: str = "qwen2.5-coder:3b"
     system2_provider: str = "ollama"  # web startup rejects "mock"
     ollama_base_url: str = "http://127.0.0.1:11434"

@@ -55,11 +55,15 @@ class MockVerdictEngine(DecisionEngine):
         return True
 
     def evaluate_choice(self, context: str, query: ChoiceQuery) -> ChoiceResult:
+        # Spread the remaining mass over the other options, as the real model does
+        others = [o.id for o in query.options if o.id != self.selected_id]
+        probabilities = {oid: (1.0 - self.confidence) / len(others) for oid in others}
+        probabilities[self.selected_id] = self.confidence
         return ChoiceResult(
             query_id=query.id,
             selected_id=self.selected_id,
             confidence=self.confidence,
-            probabilities={self.selected_id: self.confidence},
+            probabilities=probabilities,
             is_abstention=False,
             latency_ms=1.5,
         )
@@ -176,13 +180,13 @@ def test_verdict_high_confidence_locks_threshold(populated_graph):
 
     assert res.task_type == "edit_tests"
     assert res.task_source == "verdict"
-    assert res.verdict_confidence == 0.99
+    assert res.verdict_confidence == pytest.approx(0.99)
 
 
 def test_verdict_low_confidence_falls_back_to_keyword(populated_graph):
     graph, vault_dir = populated_graph
-    # Engine returns explain_only at 0.40 confidence (below threshold 0.55)
-    mock_engine = MockVerdictEngine(selected_id="explain_only", confidence=0.40)
+    # Engine returns explain_only at 0.30 confidence (below threshold 0.55)
+    mock_engine = MockVerdictEngine(selected_id="explain_only", confidence=0.30)
     config = SystemConfig(system1_confidence_threshold=0.55)
     router = Router(graph=graph, config=config, engine=mock_engine)
 
@@ -196,7 +200,7 @@ def test_verdict_low_confidence_falls_back_to_keyword(populated_graph):
     assert res.task_type == "implement_production"
     assert res.task_source == "keyword"
     assert res.verdict_task_id == "explain_only"
-    assert res.verdict_confidence == 0.40
+    assert res.verdict_confidence == pytest.approx(0.30)
 
 
 def test_force_legacy_wrap_is_blocked(populated_graph):

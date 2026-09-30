@@ -3,68 +3,86 @@
 
 from __future__ import annotations
 import ast
-import difflib
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from aegis.core.models import GraphNode
 from aegis.system1.graph import MemoryGraph
 from aegis.system1.leaf import select_function_name
 
 
-def extract_habit_details(model_output: str, approved_output: str) -> Optional[Dict[str, Any]]:
-    r"""Computes line diff between model output and approved output.
-    Rules evaluated in order, first match wins:
-    1. Added/changed line matches retries\s*=\s*(\d+) -> key=retries, value=n
-    2. Else matches timeout_s\s*=\s*([0-9.]+) -> key=timeout_s, value=n
-    3. Else matches key_id\s*=\s*"([^"]+)" -> key=key_id, value="val"
-    4. Else None.
-    """
-    diff = list(difflib.ndiff(model_output.splitlines(), approved_output.splitlines()))
-    added_lines = [line[2:] for line in diff if line.startswith("+ ")]
-    if not added_lines:
-        added_lines = approved_output.splitlines()
-
-    for line in added_lines:
-        m = re.search(r"retries\s*=\s*(\d+)", line)
-        if m:
-            val = m.group(1)
-            return {
-                "key": "retries",
-                "value": val,
-                "label": f"Production vault calls must set retries={val}.",
-                "source": "approval_diff",
-            }
-
-    for line in added_lines:
-        m = re.search(r"timeout_s\s*=\s*([0-9.]+)", line)
-        if m:
-            val = m.group(1)
-            return {
-                "key": "timeout_s",
-                "value": val,
-                "label": f"Production vault calls must set timeout_s={val}.",
-                "source": "approval_diff",
-            }
-
-    for line in added_lines:
-        m = re.search(r'key_id\s*=\s*"([^"]+)"', line)
-        if m:
-            val = m.group(1)
-            return {
-                "key": "key_id",
-                "value": val,
-                "label": f'Production vault calls must set key_id="{val}".',
-                "source": "approval_diff",
-            }
-
+def _constant_source(node: ast.AST) -> Optional[str]:
+    """Source text for literal values (numbers, strings, bools, None, -n); None otherwise."""
+    if isinstance(node, ast.Constant):
+        return repr(node.value) if isinstance(node.value, str) else str(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant):
+        return f"-{node.operand.value}"
     return None
 
 
-def extract_habit_label(model_output: str, approved_output: str) -> Optional[str]:
-    details = extract_habit_details(model_output, approved_output)
-    return details["label"] if details else None
+def _call_name(func: ast.AST) -> str:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return "call"
+
+
+def _literal_kwargs(source: str) -> Optional[List[Tuple[str, str, str]]]:
+    """(callee, keyword, value) for every call keyword set to a literal, in source order."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            callee = _call_name(node.func)
+            for kw in node.keywords:
+                value = _constant_source(kw.value) if kw.arg else None
+                if value is not None:
+                    found.append(((kw.value.lineno, kw.value.col_offset), callee, kw.arg, value))
+    return [item[1:] for item in sorted(found)]
+
+
+def _regex_kwargs(source: str) -> List[Tuple[str, str, str]]:
+    """Fallback when code does not parse: keyword=literal pairs on each line."""
+    pattern = re.compile(r"""\b([A-Za-z_]\w*)\s*=\s*(-?[0-9][0-9.]*|"[^"]*"|'[^']*'|True|False|None)""")
+    return [("call", m.group(1), m.group(2)) for line in source.splitlines() for m in pattern.finditer(line)]
+
+
+def extract_habits(model_output: str, approved_output: str) -> List[Dict[str, Any]]:
+    """Keyword arguments the reviewer set to a different literal than the model did.
+
+    Any call in the approved code whose literal keyword value was added or
+    changed relative to the model's patch becomes a habit, scoped to the
+    callee: editing aegis_seal(..., retries=3) to retries=1 yields
+    "Calls to aegis_seal must set retries=1."
+    """
+    before = _literal_kwargs(model_output)
+    after = _literal_kwargs(approved_output)
+    if before is None or after is None:
+        before, after = _regex_kwargs(model_output), _regex_kwargs(approved_output)
+
+    before_values = {(callee, kw): value for callee, kw, value in before}
+    habits: List[Dict[str, Any]] = []
+    seen = set()
+    for callee, kw, value in after:
+        if (callee, kw) in seen or before_values.get((callee, kw)) == value:
+            continue
+        seen.add((callee, kw))
+        target = f"Calls to {callee}" if callee != "call" else "Production calls"
+        habits.append({
+            "key": f"{callee}:{kw}",
+            "callee": callee,
+            "argument": kw,
+            "value": value,
+            "previous_value": before_values.get((callee, kw)),
+            "label": f"{target} must set {kw}={value}.",
+            "source": "approval_diff",
+        })
+    return habits
 
 
 def replace_function_source(
