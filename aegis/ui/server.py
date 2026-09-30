@@ -30,9 +30,10 @@ from aegis.system1.graph import MemoryGraph
 from aegis.system1.leaf import compile_leaf, estimate_tokens, extract_function_source, select_function_name, select_target
 from aegis.system1.router import Router, scoped_exclusions
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
+from aegis.system2.websearch import SearchOutcome, WebSearcher, format_for_prompt
 from aegis.system2.prompt import (
     compile_baseline,
-    compile_free_prompt,
+    build_free_messages,
     compute_unified_diff,
     extract_code,
     get_raw_baseline_code,
@@ -93,8 +94,18 @@ async def add_no_cache_headers(request, call_next):
 runs_cache: Dict[str, Dict[str, Any]] = {}
 
 
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
 class RunRequest(BaseModel):
     prompt: str
+    # Earlier turns of this chat thread, oldest first. Used in No-workspace mode;
+    # governed runs stay single-shot so the leaf context stays minimal.
+    history: List[ChatTurn] = []
+    # Search the web for this turn (No-workspace mode only; ignored for governed runs)
+    web_search: bool = False
 
 
 class ApproveRequest(BaseModel):
@@ -125,6 +136,7 @@ def get_health() -> Dict[str, Any]:
         "model": config_manager.config.system2_model,
         "installed_models": installed_models,
         "offline_env": True,
+        "web_search_allowed": config_manager.config.allow_web_search,
     }
 
 
@@ -203,13 +215,33 @@ def _free_payload(run_id: str, text: str, thinking: str, lat_ms: float, error: b
     }
 
 
-def _free_stream(run_id: str, prompt: str):
+def _web_search(query: str) -> SearchOutcome:
+    cfg = config_manager.config
+    if not cfg.allow_web_search:
+        return SearchOutcome("disabled", error="allow_web_search is false in .aegis/config.json")
+    searcher = WebSearcher(timeout_s=cfg.web_search_timeout_s, searxng_url=cfg.web_search_searxng_url)
+    return searcher.search(query)
+
+
+def _free_stream(run_id: str, prompt: str, history: List[ChatTurn], web_search: bool = False):
     """No-workspace generation, yielding the same SSE event types as a governed run."""
-    yield f"data: {json.dumps({'type': 'init', 'run_id': run_id, 'status': 'free', 'free': True, 'model': config_manager.config.system2_model})}\n\n"
+    history_dicts = [t.model_dump() for t in history]
+    turns = len(build_free_messages(prompt, history_dicts)) - 2
+    yield f"data: {json.dumps({'type': 'init', 'run_id': run_id, 'status': 'free', 'free': True, 'history_turns': turns, 'web_search': web_search, 'model': config_manager.config.system2_model})}\n\n"
+
+    web: Dict[str, Any] = {"requested": web_search}
+    web_context = None
+    if web_search:
+        yield f"data: {json.dumps({'type': 'search', 'status': 'searching'})}\n\n"
+        outcome = _web_search(prompt)
+        web.update(outcome.to_dict())
+        web_context = format_for_prompt(outcome)
+        yield f"data: {json.dumps({'type': 'search', 'status': outcome.status, 'provider': outcome.provider, 'count': len(outcome.results)})}\n\n"
+    messages = build_free_messages(prompt, history_dicts, web_context)
     text, thinking, error = "", "", False
     t0 = time.perf_counter()
     try:
-        for chunk in generator.complete_stream(compile_free_prompt(prompt)):
+        for chunk in generator.chat_stream(messages):
             if chunk.get("thinking"):
                 thinking += chunk["thinking"]
                 yield f"data: {json.dumps({'type': 'thinking', 'chunk': chunk['thinking']})}\n\n"
@@ -219,6 +251,8 @@ def _free_stream(run_id: str, prompt: str):
     except Exception as e:
         text, error = f"Local generator error: {e}", True
     payload = _free_payload(run_id, text, thinking, (time.perf_counter() - t0) * 1000.0, error)
+    payload["history_turns"] = turns
+    payload["web"] = web
     yield f"data: {json.dumps(payload, default=str)}\n\n"
 
 
@@ -229,12 +263,13 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
     tool_log = []
 
     if free_mode:
-        t0 = time.perf_counter()
-        try:
-            gen = generator.complete(compile_free_prompt(prompt))
-            return _free_payload(run_id, gen.text, gen.thinking or "", (time.perf_counter() - t0) * 1000.0, False)
-        except Exception as e:
-            return _free_payload(run_id, f"Local generator error: {e}", "", (time.perf_counter() - t0) * 1000.0, True)
+        # Same path as streaming, collected into one response
+        payload: Dict[str, Any] = {}
+        for event in _free_stream(run_id, prompt, req.history, req.web_search):
+            evt = json.loads(event[len("data: "):])
+            if evt.get("type") == "finished":
+                payload = evt
+        return payload
 
     # 1. Search decisions tool
     search_res = search_decisions(graph, prompt)
@@ -271,6 +306,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
                 "threshold": config.system1_confidence_threshold,
+                "system1_ms": route.system1_latency_ms,
             },
             "policy": {
                 "primary_id": route.primary_policy_id,
@@ -318,6 +354,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
                 "threshold": config.system1_confidence_threshold,
+                "system1_ms": route.system1_latency_ms,
             },
             "policy": {
                 "primary_id": None,
@@ -358,6 +395,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
                 "threshold": config.system1_confidence_threshold,
+                "system1_ms": route.system1_latency_ms,
             },
             "policy": {
                 "primary_id": None,
@@ -405,6 +443,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         "diff": "",
         "latency_ms": 0.0,
         "unparseable": False,
+        "source": "model",
     }
     aegis_data: Dict[str, Any] = {
         "text": "",
@@ -421,21 +460,24 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         base_code = extract_code(base_gen.text)
         base_parseable = is_code_parseable(base_code, fn_name)
         base_diff = compute_unified_diff(old_fn_source, base_code) if base_parseable else ""
-        if not base_diff:
+        if base_diff:
+            baseline_data.update(text=base_gen.text, code=base_code, diff=base_diff, latency_ms=base_gen.latency_ms)
+        else:
             fallback_base_code = get_raw_baseline_code(prompt, fn_name)
             base_diff = compute_unified_diff(old_fn_source, fallback_base_code)
-            baseline_data["diff"] = base_diff
-            baseline_data["code"] = fallback_base_code
+            baseline_data.update(diff=base_diff, code=fallback_base_code, latency_ms=None, source="template",
+                                 thinking="Illustrative legacy pattern from this workspace's superseded decisions; not a model run.")
     except GeneratorUnavailable as exc:
         fallback_base_code = get_raw_baseline_code(prompt, fn_name)
         base_diff = compute_unified_diff(old_fn_source, fallback_base_code)
         baseline_data = {
             "text": f"```python\n{fallback_base_code}\n```",
-            "thinking": "",
+            "thinking": "Illustrative legacy pattern from this workspace's superseded decisions; not a model run.",
             "code": fallback_base_code,
             "diff": base_diff,
-            "latency_ms": 0.0,
+            "latency_ms": None,
             "unparseable": False,
+            "source": "template",
         }
 
     try:
@@ -502,6 +544,7 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
             "latency_ms": route.verdict_latency_ms or 0.0,
             "error": route.verdict_error,
             "threshold": config.system1_confidence_threshold,
+            "system1_ms": route.system1_latency_ms,
         },
         "policy": {
             "primary_id": route.primary_policy_id,
@@ -539,7 +582,7 @@ def run_prompt_stream(req: RunRequest):
     run_id = str(uuid.uuid4())
 
     if free_mode:
-        return StreamingResponse(_free_stream(run_id, prompt), media_type="text/event-stream")
+        return StreamingResponse(_free_stream(run_id, prompt, req.history, req.web_search), media_type="text/event-stream")
 
     def event_stream():
         tool_log = []
@@ -563,6 +606,7 @@ def run_prompt_stream(req: RunRequest):
                     "latency_ms": route.verdict_latency_ms or 0.0,
                     "error": route.verdict_error,
                     "threshold": config.system1_confidence_threshold,
+                    "system1_ms": route.system1_latency_ms,
                 },
                 "policy": {
                     "primary_id": route.primary_policy_id,
@@ -621,6 +665,7 @@ def run_prompt_stream(req: RunRequest):
                     "latency_ms": route.verdict_latency_ms or 0.0,
                     "error": route.verdict_error,
                     "threshold": config.system1_confidence_threshold,
+                    "system1_ms": route.system1_latency_ms,
                 },
                 "policy": {
                     "primary_id": None,
@@ -670,6 +715,7 @@ def run_prompt_stream(req: RunRequest):
                     "latency_ms": route.verdict_latency_ms or 0.0,
                     "error": route.verdict_error,
                     "threshold": config.system1_confidence_threshold,
+                    "system1_ms": route.system1_latency_ms,
                 },
                 "policy": {
                     "primary_id": route.primary_policy_id,
@@ -743,6 +789,7 @@ def run_prompt_stream(req: RunRequest):
                 "latency_ms": route.verdict_latency_ms or 0.0,
                 "error": route.verdict_error,
                 "threshold": config.system1_confidence_threshold,
+                "system1_ms": route.system1_latency_ms,
             },
             "policy": {
                 "primary_id": route.primary_policy_id,
@@ -811,7 +858,8 @@ def run_prompt_stream(req: RunRequest):
         # Generate Raw Baseline data representing unconstrained repo patterns
         base_code = ""
         base_diff = ""
-        base_latency = 2800.0
+        base_latency: Optional[float] = None
+        base_source = "template"
 
         if isinstance(generator, MockGenerator):
             try:
@@ -819,21 +867,26 @@ def run_prompt_stream(req: RunRequest):
                 base_code = extract_code(base_gen.text)
                 base_parseable = is_code_parseable(base_code, fn_name)
                 base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel) if base_parseable else ""
-                base_latency = base_gen.latency_ms
+                if base_diff:
+                    base_latency, base_source = base_gen.latency_ms, "model"
             except Exception:
-                base_code = get_raw_baseline_code(prompt, fn_name)
-                base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel)
-        else:
+                base_diff = ""
+        if not base_diff:
             base_code = get_raw_baseline_code(prompt, fn_name)
             base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel)
 
         baseline_data = {
             "text": f"```python\n{base_code}\n```",
-            "thinking": "Generated from unconstrained raw repository context (all files, no ADR policy pruning).",
+            "thinking": (
+                "Generated from the full, unpruned repository context."
+                if base_source == "model"
+                else "Illustrative legacy pattern from this workspace's superseded decisions; not a model run."
+            ),
             "code": base_code,
             "diff": base_diff,
             "latency_ms": base_latency,
             "unparseable": False,
+            "source": base_source,
         }
 
         runs_cache[run_id] = {
@@ -1474,3 +1527,9 @@ if not index_file.exists():
     index_file.write_text("<!DOCTYPE html><html><body>AegisTree</body></html>", encoding="utf-8")
 
 app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("aegis.ui.server:app", host="127.0.0.1", port=8080, reload=False)
+

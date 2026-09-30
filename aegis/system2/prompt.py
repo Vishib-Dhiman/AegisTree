@@ -44,15 +44,48 @@ def compile_baseline(
     return baseline_text
 
 
-def compile_free_prompt(prompt: str) -> str:
-    """Prompt for No-workspace mode: no repository, decisions, bans or habits attached."""
-    return (
-        "You are a coding assistant running entirely on this machine.\n"
-        "No repository is attached and no architecture decisions apply.\n"
-        "Answer the request directly. Put any code in fenced blocks.\n\n"
-        "USER REQUEST:\n"
-        f"{prompt}"
-    )
+FREE_SYSTEM_PROMPT = (
+    "You are a coding assistant running entirely on this machine. "
+    "No repository is attached and no architecture decisions apply. "
+    "This is an ongoing conversation: resolve follow-ups such as 'now in C++' or "
+    "'make it faster' against the earlier turns. "
+    "Answer directly and put any code in fenced blocks."
+)
+
+# Keep the most recent turns, within a budget that fits small local models
+MAX_HISTORY_TURNS = 12
+MAX_HISTORY_CHARS = 12000
+
+
+def build_free_messages(prompt: str, history: Optional[list] = None, web_context: Optional[str] = None) -> list[dict]:
+    """Chat messages for No-workspace mode: system prompt, recent history, new request.
+
+    web_context, when given, is a second system message placed just before the
+    request (web search results for this turn only).
+
+    history is a list of {"role": "user"|"assistant", "content": str}, oldest first.
+    Turns with other roles or empty content are dropped; the newest turns are kept.
+    """
+    turns = [
+        {"role": t["role"], "content": str(t["content"])}
+        for t in (history or [])
+        if isinstance(t, dict) and t.get("role") in ("user", "assistant") and str(t.get("content", "")).strip()
+    ][-MAX_HISTORY_TURNS:]
+
+    kept: list[dict] = []
+    used = 0
+    for turn in reversed(turns):
+        used += len(turn["content"])
+        if used > MAX_HISTORY_CHARS:
+            break
+        kept.append(turn)
+    kept.reverse()
+    # A conversation must not open with an assistant turn
+    while kept and kept[0]["role"] == "assistant":
+        kept.pop(0)
+
+    web = [{"role": "system", "content": web_context}] if web_context else []
+    return [{"role": "system", "content": FREE_SYSTEM_PROMPT}, *kept, *web, {"role": "user", "content": prompt}]
 
 
 def extract_code(text: str) -> str:

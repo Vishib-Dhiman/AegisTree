@@ -59,6 +59,12 @@ class SystemConfig(BaseModel):
     system1_retrieval_threshold: float = 0.5
     # Revival block when retrieval itself landed on the superseded decision
     system1_revival_assist_threshold: float = 0.5
+    # Web search (No-workspace mode only, opt-in per conversation). Set False to
+    # guarantee no request ever leaves the machine, e.g. before a demo.
+    allow_web_search: bool = True
+    web_search_timeout_s: float = 4.0
+    # Optional self-hosted SearXNG, tried before DuckDuckGo and Wikipedia
+    web_search_searxng_url: Optional[str] = None
     system2_model: str = "qwen2.5-coder:3b"
     system2_provider: str = "ollama"  # web startup rejects "mock"
     ollama_base_url: str = "http://127.0.0.1:11434"

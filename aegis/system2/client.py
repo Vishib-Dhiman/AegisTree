@@ -34,6 +34,9 @@ class Generator(Protocol):
     def complete_stream(self, prompt: str):
         ...
 
+    def chat_stream(self, messages: list[dict]):
+        ...
+
 
 class OllamaGenerator:
     """Air-gapped client for local Ollama daemon."""
@@ -113,7 +116,6 @@ class OllamaGenerator:
         )
 
     def complete_stream(self, prompt: str):
-        url = f"{self.base_url}/api/generate"
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -121,6 +123,26 @@ class OllamaGenerator:
             "keep_alive": "30m",
             "options": {"temperature": self.temperature},
         }
+        yield from self._stream_json(f"{self.base_url}/api/generate", payload)
+
+    def chat_stream(self, messages: list[dict]):
+        """Multi-turn chat via /api/chat, yielding the same chunk shape as complete_stream."""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {"temperature": self.temperature},
+        }
+        for chunk in self._stream_json(f"{self.base_url}/api/chat", payload):
+            message = chunk.get("message") or {}
+            yield {
+                "thinking": message.get("thinking", "") or "",
+                "response": message.get("content", "") or "",
+                "done": chunk.get("done", False),
+            }
+
+    def _stream_json(self, url: str, payload: dict):
         try:
             with self.client.stream("POST", url, json=payload, timeout=self.timeout) as resp:
                 resp.raise_for_status()
@@ -304,4 +326,10 @@ class MockGenerator:
             "response": gen.text,
             "done": True,
         }
+
+    def chat_stream(self, messages: list[dict]):
+        """Echoes the conversation length so tests can see history arrived."""
+        last = messages[-1]["content"] if messages else ""
+        turns = sum(1 for m in messages if m.get("role") in ("user", "assistant")) - 1
+        yield {"thinking": "", "response": f"(mock) {turns} earlier turns; latest: {last}", "done": True}
 

@@ -37,6 +37,6 @@ if [ "$MODE" = "tui" ] || [ "$MODE" = "cli" ]; then
   echo "Launching AegisTree Terminal User Interface..."
   exec $PYTHON -m aegis.ui.cli
 else
-  echo "Launching AegisTree Sovereign Web Dashboard at http://127.0.0.1:8080..."
+  echo "Launching ClearSky Sovereign Web Dashboard at http://127.0.0.1:8080..."
   exec $PYTHON -m uvicorn aegis.ui.server:app --host 127.0.0.1 --port 8080
 fi

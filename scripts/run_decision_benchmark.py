@@ -14,6 +14,7 @@ Evaluates subtle decision-quality divergences across 9 critical dimensions:
 
 import time
 import laya
+import psutil
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -382,10 +383,16 @@ def run_suite():
         f"• Total Tests: {len(results)}\n"
         f"• Pass Rate: [bold green]{pass_pct:.1f}%[/bold green] ({passed_count}/{len(results)})\n"
         f"• Average Decision Latency: [bold yellow]{avg_lat:.1f} ms[/bold yellow]\n"
-        f"• External Packets Transmitted: [bold green]0 packets[/bold green] (100% Air-Gapped)\n"
+        f"• Open non-loopback network connections (measured): {external_connections()}\n"
         f"• Output Tokens Generated: [bold green]0 tokens[/bold green] (True Non-Autoregressive)",
         title="[bold green]Benchmark Complete[/bold green]"
     ))
+
+
+def external_connections() -> int:
+    """Open non-loopback network connections held by this process right now."""
+    conns = psutil.Process().net_connections(kind="inet")
+    return sum(1 for c in conns if c.raddr and c.raddr.ip not in ("127.0.0.1", "::1"))
 
 if __name__ == "__main__":
     run_suite()

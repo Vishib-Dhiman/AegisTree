@@ -100,6 +100,7 @@ class RouteResult(BaseModel):
     retrieval_confidence: Optional[float] = None
     retrieval_latency_ms: Optional[float] = None
     retrieval_scores: Dict[str, Dict[str, float]] = {}
+    system1_latency_ms: Optional[float] = None
     block_confidence: Optional[float] = None
     revived_policy_id: Optional[str] = None
 
@@ -239,6 +240,19 @@ class Router:
                 self.engine = None
 
     def route(
+        self,
+        prompt: str,
+        workspace_root: Optional[Union[str, Path]] = None,
+        now: Optional[datetime] = None,
+    ) -> RouteResult:
+        """Route a request, recording the wall time of all of System 1 (every
+        Verdict call plus scoping, retrieval and policy checks)."""
+        t0 = time.perf_counter()
+        result = self._route(prompt, workspace_root, now)
+        result.system1_latency_ms = (time.perf_counter() - t0) * 1000.0
+        return result
+
+    def _route(
         self,
         prompt: str,
         workspace_root: Optional[Union[str, Path]] = None,

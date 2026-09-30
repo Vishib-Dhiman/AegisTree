@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import psutil
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -42,6 +43,12 @@ REHEARSED_PROMPTS = {
     "11": ("Kyber Post-Quantum (Abstention)", "Migrate the vault to CRYSTALS-Kyber."),
 }
 
+
+
+def external_connections() -> int:
+    """Open non-loopback network connections held by this process right now."""
+    conns = psutil.Process().net_connections(kind="inet")
+    return sum(1 for c in conns if c.raddr and c.raddr.ip not in ("127.0.0.1", "::1"))
 
 def print_banner():
     banner = Text()
@@ -98,7 +105,12 @@ def run_prompt_workflow(prompt_text: str):
     s1_table.add_row("[bold]Policy Retrieval:[/bold]", retrieval_text)
     confidence_text = f"{route.verdict_confidence:.2f}" if route.verdict_confidence is not None else "n/a"
     s1_table.add_row("[bold]System 1 Latency:[/bold]", f"[bold yellow]{s1_latency:.2f} ms[/bold yellow] (Task confidence: {confidence_text})")
-    s1_table.add_row("[bold]Air-Gap Status:[/bold]", "[bold green]0 External Packets Transmitted (100% Sovereign)[/bold green]")
+    external = external_connections()
+    s1_table.add_row(
+        "[bold]Network:[/bold]",
+        f"[bold green]{external} non-loopback connections (measured)[/bold green]" if external == 0
+        else f"[bold red]{external} non-loopback connections open[/bold red]",
+    )
 
     console.print(Panel(s1_table, title="[bold cyan]System 1: Non-Autoregressive Decision Layer[/bold cyan]", border_style="cyan"))
 
