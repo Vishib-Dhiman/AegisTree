@@ -17,6 +17,9 @@ export TRANSFORMERS_OFFLINE=1
 # Check local Ollama status without exiting if offline (mock engine available)
 if $PYTHON -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=2)" >/dev/null 2>&1; then
   echo "✓ Local Ollama daemon detected at 127.0.0.1:11434"
+  if ! $PYTHON -c "import json, urllib.request; tags = json.load(urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=2)); raise SystemExit(0 if any(m.get('name') == 'qwen3-vl:8b-instruct' for m in tags.get('models', [])) else 1)" >/dev/null 2>&1; then
+    echo "Notice: vision model missing. Screenshots need it: ollama pull qwen3-vl:8b-instruct"
+  fi
 else
   echo "Notice: Ollama not running at 127.0.0.1:11434. Web/TUI will offer Mock Engine or switchable local models."
 fi

@@ -57,8 +57,15 @@ MAX_HISTORY_TURNS = 12
 MAX_HISTORY_CHARS = 12000
 
 
-def build_free_messages(prompt: str, history: Optional[list] = None, web_context: Optional[str] = None) -> list[dict]:
+def build_free_messages(
+    prompt: str,
+    history: Optional[list] = None,
+    web_context: Optional[str] = None,
+    extra_system: Optional[str] = None,
+) -> list[dict]:
     """Chat messages for No-workspace mode: system prompt, recent history, new request.
+
+    extra_system, when given, is appended to the system prompt (computer access).
 
     web_context, when given, is a second system message placed just before the
     request (web search results for this turn only).
@@ -85,7 +92,8 @@ def build_free_messages(prompt: str, history: Optional[list] = None, web_context
         kept.pop(0)
 
     web = [{"role": "system", "content": web_context}] if web_context else []
-    return [{"role": "system", "content": FREE_SYSTEM_PROMPT}, *kept, *web, {"role": "user", "content": prompt}]
+    system = FREE_SYSTEM_PROMPT + (f"\n\n{extra_system}" if extra_system else "")
+    return [{"role": "system", "content": system}, *kept, *web, {"role": "user", "content": prompt}]
 
 
 def extract_code(text: str) -> str:

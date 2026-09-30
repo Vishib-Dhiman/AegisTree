@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -31,6 +31,8 @@ from aegis.system1.leaf import compile_leaf, estimate_tokens, extract_function_s
 from aegis.system1.router import Router, scoped_exclusions
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
 from aegis.system2.websearch import SearchOutcome, WebSearcher, format_for_prompt
+from aegis.system2.computer import MAX_TOOL_ROUNDS, computer_system_prompt, parse_tool_call, run_tool
+from aegis.system2.images import normalize_images, screenshot_note
 from aegis.system2.prompt import (
     compile_baseline,
     build_free_messages,
@@ -106,6 +108,10 @@ class RunRequest(BaseModel):
     history: List[ChatTurn] = []
     # Search the web for this turn (No-workspace mode only; ignored for governed runs)
     web_search: bool = False
+    # Let the model use read-only tools on this machine (No-workspace mode only)
+    computer: bool = False
+    # Screenshots for this turn, base64 or data URLs (validated by normalize_images)
+    images: List[str] = []
 
 
 class ApproveRequest(BaseModel):
@@ -137,6 +143,9 @@ def get_health() -> Dict[str, Any]:
         "installed_models": installed_models,
         "offline_env": True,
         "web_search_allowed": config_manager.config.allow_web_search,
+        "computer_access_allowed": config_manager.config.allow_computer_access,
+        "vision_model": config_manager.config.vision_model,
+        "vision_available": _vision_available(),
     }
 
 
@@ -223,49 +232,170 @@ def _web_search(query: str) -> SearchOutcome:
     return searcher.search(query)
 
 
-def _free_stream(run_id: str, prompt: str, history: List[ChatTurn], web_search: bool = False):
-    """No-workspace generation, yielding the same SSE event types as a governed run."""
+def _vision_available() -> bool:
+    cfg = config_manager.config
+    if isinstance(generator, MockGenerator):
+        return True
+    if not generator.is_model_installed(cfg.vision_model):
+        return False
+    return generator.supports_vision(cfg.vision_model)
+
+
+def _generator_for(images: List[str]):
+    """The generator for this turn: the active one, or the vision model when it can't read images.
+
+    Returns (generator, model_name, vision_routed).
+    """
+    active = config_manager.config.system2_model
+    if not images or isinstance(generator, MockGenerator) or generator.supports_vision():
+        return generator, active, False
+    vision_model = config_manager.config.vision_model
+    turn_config = config_manager.config.model_copy(update={"system2_model": vision_model})
+    return OllamaGenerator(config=turn_config), vision_model, True
+
+
+def _checked_images(req: "RunRequest") -> List[str]:
+    try:
+        return normalize_images(req.images)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_local(request: Optional[Request]) -> bool:
+    """True when the request comes from this machine (computer access is never offered to others)."""
+    if request is None or request.client is None:
+        return False
+    return request.client.host in LOOPBACK_HOSTS
+
+
+def _sse(obj: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(obj, default=str)}\n\n"
+
+
+def _free_stream(
+    run_id: str,
+    prompt: str,
+    history: List[ChatTurn],
+    web_search: bool = False,
+    computer: bool = False,
+    local: bool = False,
+    images: Optional[List[str]] = None,
+):
+    """No-workspace generation, yielding the same SSE event types as a governed run.
+
+    With computer access on, the model may call read-only tools (see
+    aegis.system2.computer). Each round streams normally; when a round ends in a
+    tool call, the tool runs, a 'tool' event is sent, and the model continues
+    with the result, up to MAX_TOOL_ROUNDS calls.
+    """
     history_dicts = [t.model_dump() for t in history]
     turns = len(build_free_messages(prompt, history_dicts)) - 2
-    yield f"data: {json.dumps({'type': 'init', 'run_id': run_id, 'status': 'free', 'free': True, 'history_turns': turns, 'web_search': web_search, 'model': config_manager.config.system2_model})}\n\n"
+
+    computer_status = "off"
+    if computer:
+        if not config_manager.config.allow_computer_access:
+            computer_status = "disabled"
+        elif not local:
+            computer_status = "remote"
+        else:
+            computer_status = "on"
+    computer_on = computer_status == "on"
+    images = images or []
+    turn_gen, turn_model, vision_routed = _generator_for(images)
+
+    yield _sse({
+        "type": "init", "run_id": run_id, "status": "free", "free": True, "history_turns": turns,
+        "web_search": web_search, "computer": computer_status, "model": turn_model,
+        "images": len(images), "vision_routed": vision_routed,
+    })
 
     web: Dict[str, Any] = {"requested": web_search}
     web_context = None
     if web_search:
-        yield f"data: {json.dumps({'type': 'search', 'status': 'searching'})}\n\n"
+        yield _sse({"type": "search", "status": "searching"})
         outcome = _web_search(prompt)
         web.update(outcome.to_dict())
         web_context = format_for_prompt(outcome)
-        yield f"data: {json.dumps({'type': 'search', 'status': outcome.status, 'provider': outcome.provider, 'count': len(outcome.results)})}\n\n"
-    messages = build_free_messages(prompt, history_dicts, web_context)
+        yield _sse({"type": "search", "status": outcome.status, "provider": outcome.provider, "count": len(outcome.results)})
+
+    extra = computer_system_prompt() if computer_on else None
+    messages = build_free_messages(prompt, history_dicts, web_context, extra)
+    if images:
+        messages[-1]["images"] = images
     text, thinking, error = "", "", False
+    tools: List[Dict[str, Any]] = []
     t0 = time.perf_counter()
     try:
-        for chunk in generator.chat_stream(messages):
-            if chunk.get("thinking"):
-                thinking += chunk["thinking"]
-                yield f"data: {json.dumps({'type': 'thinking', 'chunk': chunk['thinking']})}\n\n"
-            if chunk.get("response"):
-                text += chunk["response"]
-                yield f"data: {json.dumps({'type': 'response', 'chunk': chunk['response']})}\n\n"
+        for round_idx in range(MAX_TOOL_ROUNDS + 1):
+            round_text = ""
+            call = None
+            tools_left = computer_on and round_idx < MAX_TOOL_ROUNDS
+            stream = turn_gen.chat_stream(messages)
+            try:
+                for chunk in stream:
+                    if chunk.get("thinking"):
+                        thinking += chunk["thinking"]
+                        yield _sse({"type": "thinking", "chunk": chunk["thinking"]})
+                    if chunk.get("response"):
+                        round_text += chunk["response"]
+                        yield _sse({"type": "response", "chunk": chunk["response"]})
+                        # Stop as soon as a complete call arrives, before the model invents its result
+                        if tools_left and ("<tool>" in round_text or round_text.lstrip().startswith(("{", "```"))):
+                            call = parse_tool_call(round_text)
+                            if call:
+                                break
+            finally:
+                close = getattr(stream, "close", None)
+                if close:
+                    close()
+            if tools_left and not call:
+                call = parse_tool_call(round_text)
+            if not call:
+                text = round_text
+                break
+            tool_id = f"t{round_idx + 1}"
+            yield _sse({"type": "tool", "id": tool_id, "status": "running", "name": call["name"], "args": call.get("args") or {}})
+            result = run_tool(call)
+            record = {"id": tool_id, **result.to_dict()}
+            tools.append(record)
+            yield _sse({"type": "tool", "status": "done", **record})
+            messages = messages + [
+                {"role": "assistant", "content": round_text},
+                {"role": "user", "content": (
+                    f"TOOL RESULT for {result.name} {json.dumps(result.args)}:\n{result.for_model()}\n\n"
+                    "Call another tool if you still need information, otherwise answer my original question."
+                )},
+            ]
+        else:
+            text = round_text
     except Exception as e:
         text, error = f"Local generator error: {e}", True
     payload = _free_payload(run_id, text, thinking, (time.perf_counter() - t0) * 1000.0, error)
+    payload["model"] = turn_model
+    payload["images"] = len(images)
+    payload["vision_routed"] = vision_routed
     payload["history_turns"] = turns
     payload["web"] = web
-    yield f"data: {json.dumps(payload, default=str)}\n\n"
+    payload["computer"] = {"status": computer_status, "tools": tools}
+    if tools:
+        payload["tool_log"] = [{"tool": t["name"], "status": "ok" if t["ok"] else "error"} for t in tools] + payload["tool_log"]
+    yield _sse(payload)
 
 
 @app.post("/api/run")
-def run_prompt(req: RunRequest) -> Dict[str, Any]:
+def run_prompt(req: RunRequest, request: Request) -> Dict[str, Any]:
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
     tool_log = []
+    images = _checked_images(req)
 
     if free_mode:
         # Same path as streaming, collected into one response
         payload: Dict[str, Any] = {}
-        for event in _free_stream(run_id, prompt, req.history, req.web_search):
+        for event in _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images):
             evt = json.loads(event[len("data: "):])
             if evt.get("type") == "finished":
                 payload = evt
@@ -481,7 +611,11 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
         }
 
     try:
-        aegis_gen = generator.complete(leaf_text)
+        turn_gen, _, _ = _generator_for(images)
+        aegis_gen = turn_gen.complete(
+            f"{leaf_text}\n\n{screenshot_note(len(images))}" if images else leaf_text,
+            images or None,
+        )
         aegis_code = extract_code(aegis_gen.text)
         aegis_parseable = is_code_parseable(aegis_code, fn_name)
         aegis_diff = compute_unified_diff(old_fn_source, aegis_code) if aegis_parseable else ""
@@ -577,12 +711,16 @@ def run_prompt(req: RunRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/run/stream")
-def run_prompt_stream(req: RunRequest):
+def run_prompt_stream(req: RunRequest, request: Request):
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
+    images = _checked_images(req)
 
     if free_mode:
-        return StreamingResponse(_free_stream(run_id, prompt, req.history, req.web_search), media_type="text/event-stream")
+        return StreamingResponse(
+            _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images),
+            media_type="text/event-stream",
+        )
 
     def event_stream():
         tool_log = []
@@ -775,13 +913,16 @@ def run_prompt_stream(req: RunRequest):
             for neg in route.negative_nodes
         ]
 
+        turn_gen, turn_model, vision_routed = _generator_for(images)
         init_payload = {
             "type": "init",
             "run_id": run_id,
             "status": "ready",
             "task_type": route.task_type,
             "task_source": route.task_source,
-            "model": config_manager.config.system2_model,
+            "model": turn_model,
+            "images": len(images),
+            "vision_routed": vision_routed,
             "verdict": {
                 "loaded": route.verdict_error is None,
                 "selected_id": route.verdict_task_id,
@@ -820,7 +961,8 @@ def run_prompt_stream(req: RunRequest):
         accumulated_thinking = ""
         t0 = time.perf_counter()
         try:
-            for chunk in generator.complete_stream(leaf_text):
+            leaf_prompt = f"{leaf_text}\n\n{screenshot_note(len(images))}" if images else leaf_text
+            for chunk in turn_gen.complete_stream(leaf_prompt, images or None):
                 thinking_chunk = chunk.get("thinking", "")
                 response_chunk = chunk.get("response", "")
                 if thinking_chunk:

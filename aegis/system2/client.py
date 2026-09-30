@@ -63,7 +63,7 @@ class OllamaGenerator:
             follow_redirects=False,
         )
 
-    def complete(self, prompt: str) -> Generation:
+    def complete(self, prompt: str, images: Optional[list[str]] = None) -> Generation:
         url = f"{self.base_url}/api/generate"
         payload = {
             "model": self.model,
@@ -72,6 +72,8 @@ class OllamaGenerator:
             "keep_alive": "30m",
             "options": {"temperature": self.temperature},
         }
+        if images:
+            payload["images"] = images
 
         t0 = time.perf_counter()
         try:
@@ -115,7 +117,7 @@ class OllamaGenerator:
             backend="ollama",
         )
 
-    def complete_stream(self, prompt: str):
+    def complete_stream(self, prompt: str, images: Optional[list[str]] = None):
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -123,10 +125,15 @@ class OllamaGenerator:
             "keep_alive": "30m",
             "options": {"temperature": self.temperature},
         }
+        if images:
+            payload["images"] = images
         yield from self._stream_json(f"{self.base_url}/api/generate", payload)
 
     def chat_stream(self, messages: list[dict]):
-        """Multi-turn chat via /api/chat, yielding the same chunk shape as complete_stream."""
+        """Multi-turn chat via /api/chat, yielding the same chunk shape as complete_stream.
+
+        A message may carry an "images" list of base64 strings (vision models).
+        """
         payload = {
             "model": self.model,
             "messages": messages,
@@ -176,6 +183,21 @@ class OllamaGenerator:
                 f"Local generator error: {e}"
             ) from e
 
+    _vision_cache: dict[str, bool] = {}
+
+    def supports_vision(self, model_name: Optional[str] = None) -> bool:
+        """True when Ollama reports the model can read images (cached per model)."""
+        target = model_name or self.model
+        if target in OllamaGenerator._vision_cache:
+            return OllamaGenerator._vision_cache[target]
+        try:
+            resp = self.client.post(f"{self.base_url}/api/show", json={"model": target}, timeout=3.0)
+            ok = resp.status_code == 200 and "vision" in (resp.json().get("capabilities") or [])
+        except Exception:
+            return False  # not cached: the daemon may just be starting
+        OllamaGenerator._vision_cache[target] = ok
+        return ok
+
     def get_installed_models(self) -> list[str]:
         try:
             resp = self.client.get(f"{self.base_url}/api/tags", timeout=2.0)
@@ -218,7 +240,10 @@ class MockGenerator:
     def is_available(self) -> bool:
         return True
 
-    def complete(self, prompt: str) -> Generation:
+    def supports_vision(self, model_name: Optional[str] = None) -> bool:
+        return True
+
+    def complete(self, prompt: str, images: Optional[list[str]] = None) -> Generation:
         t0 = time.perf_counter()
 
         p_low = prompt.lower()
@@ -314,8 +339,8 @@ class MockGenerator:
             backend="mock",
         )
 
-    def complete_stream(self, prompt: str):
-        gen = self.complete(prompt)
+    def complete_stream(self, prompt: str, images: Optional[list[str]] = None):
+        gen = self.complete(prompt, images)
         yield {
             "thinking": gen.thinking + "\n",
             "response": "",
@@ -331,5 +356,7 @@ class MockGenerator:
         """Echoes the conversation length so tests can see history arrived."""
         last = messages[-1]["content"] if messages else ""
         turns = sum(1 for m in messages if m.get("role") in ("user", "assistant")) - 1
-        yield {"thinking": "", "response": f"(mock) {turns} earlier turns; latest: {last}", "done": True}
+        images = len(messages[-1].get("images") or []) if messages else 0
+        seen = f"; {images} images" if images else ""
+        yield {"thinking": "", "response": f"(mock) {turns} earlier turns{seen}; latest: {last}", "done": True}
 

@@ -128,10 +128,11 @@ def test_dynamic_system2_model_switching():
         assert config_manager.config.system2_model == "deepseek-r1:8b"
         assert res1["metadata"]["params"] == "8.0B"
 
-        # Switch to Qwen 2.5 Coder 7B
-        res2 = config_manager.set_system2_model("qwen2.5-coder:7b")
+        # Switch to Qwen3-VL 8B (vision)
+        res2 = config_manager.set_system2_model("qwen3-vl:8b-instruct")
         assert res2["status"] == "success"
-        assert config_manager.config.system2_model == "qwen2.5-coder:7b"
+        assert config_manager.config.system2_model == "qwen3-vl:8b-instruct"
+        assert res2["metadata"]["vision"] is True
 
         # Switch to Mock for fast tests
         res3 = config_manager.set_system2_model("mock-offline-fast")
@@ -139,3 +140,17 @@ def test_dynamic_system2_model_switching():
         assert config_manager.config.system2_provider == "mock"
     finally:
         config_manager.set_system2_model(original_model)
+
+
+def test_model_list_only_offers_installed_models(monkeypatch):
+    # A model removed from Ollama must not stay in the dropdown
+    monkeypatch.setattr(config_manager, "_query_installed_models", lambda: ["deepseek-r1:14b"])
+    models = config_manager.list_available_models()["models"]
+    assert "deepseek-r1:14b" in models
+    assert "deepseek-r1:8b" not in models
+
+
+def test_model_list_falls_back_to_catalog_when_ollama_is_down(monkeypatch):
+    monkeypatch.setattr(config_manager, "_query_installed_models", lambda: [])
+    models = config_manager.list_available_models()["models"]
+    assert "deepseek-r1:8b" in models and "mock-offline-fast" not in models

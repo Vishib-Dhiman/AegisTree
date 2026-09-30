@@ -156,27 +156,27 @@ function initEventListeners() {
   const promptInput = document.getElementById("prompt-input");
   const btnRun = document.getElementById("btn-run");
 
-  // Send action
-  btnRun.addEventListener("click", () => {
+  // Send action: text, screenshots, or both
+  const sendCurrent = () => {
     const text = promptInput.value.trim();
-    if (text) {
-      runWithPrompt(text);
-      promptInput.value = "";
-      autoResizeTextarea(promptInput);
-    }
-  });
+    if ((!text && !pendingImages.length) || btnRun.disabled) return;
+    const images = pendingImages;
+    pendingImages = [];
+    renderAttachTray();
+    runWithPrompt(text || "Describe this screenshot.", null, images);
+    promptInput.value = "";
+    autoResizeTextarea(promptInput);
+  };
+  btnRun.addEventListener("click", sendCurrent);
 
   promptInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      const text = promptInput.value.trim();
-      if (text) {
-        runWithPrompt(text);
-        promptInput.value = "";
-        autoResizeTextarea(promptInput);
-      }
+      sendCurrent();
     }
   });
+
+  initAttachments();
 
   promptInput.addEventListener("input", () => {
     autoResizeTextarea(promptInput);
@@ -332,6 +332,182 @@ function initEventListeners() {
   });
 }
 
+// Screenshot attachments: sent to the vision model with the next message
+const MAX_ATTACHMENTS = 4;
+const MAX_IMAGE_EDGE = 1280;
+const KEEP_ORIGINAL_BYTES = 1.5 * 1024 * 1024;
+let pendingImages = []; // { id, name, base64, thumb, width, height }
+let visionAvailable = true;
+
+function readAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`Could not read ${file.name || "the image"}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("That file is not a readable image"));
+    img.src = src;
+  });
+}
+
+function drawScaled(img, maxEdge, type, quality) {
+  const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; // JPEG has no alpha
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL(type, quality);
+}
+
+async function prepareImage(file) {
+  const original = await readAsDataURL(file);
+  const img = await loadImage(original);
+  const longest = Math.max(img.naturalWidth, img.naturalHeight);
+  // Small PNG/JPEG go as-is (sharp text); everything else is downscaled to keep prefill fast
+  const keep = (file.type === "image/png" || file.type === "image/jpeg")
+    && file.size <= KEEP_ORIGINAL_BYTES && longest <= MAX_IMAGE_EDGE;
+  const dataUrl = keep ? original : drawScaled(img, MAX_IMAGE_EDGE, "image/jpeg", 0.9);
+  return {
+    id: "img_" + Math.random().toString(36).slice(2, 9),
+    name: file.name || "screenshot",
+    base64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+    thumb: drawScaled(img, 160, "image/jpeg", 0.8),
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+  };
+}
+
+function flashAttachNote(message) {
+  const tray = document.getElementById("attach-tray");
+  if (!tray) return;
+  tray.hidden = false;
+  let note = tray.querySelector(".attach-note");
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "attach-note";
+    tray.appendChild(note);
+  }
+  note.textContent = message;
+  clearTimeout(flashAttachNote._t);
+  flashAttachNote._t = setTimeout(renderAttachTray, 3500);
+}
+
+async function addImageFiles(fileList) {
+  const files = Array.from(fileList || []).filter(f => f.type && f.type.startsWith("image/"));
+  if (!files.length) return;
+  if (!visionAvailable) {
+    flashAttachNote("Screenshots need the vision model. Run: ollama pull qwen3-vl:8b-instruct");
+    return;
+  }
+  for (const file of files) {
+    if (pendingImages.length >= MAX_ATTACHMENTS) {
+      flashAttachNote(`Up to ${MAX_ATTACHMENTS} screenshots per message.`);
+      break;
+    }
+    try {
+      pendingImages.push(await prepareImage(file));
+    } catch (err) {
+      flashAttachNote(err.message);
+    }
+  }
+  renderAttachTray();
+  document.getElementById("prompt-input").focus();
+}
+
+function renderAttachTray() {
+  const tray = document.getElementById("attach-tray");
+  if (!tray) return;
+  tray.hidden = pendingImages.length === 0;
+  tray.innerHTML = pendingImages.map(img => `
+    <div class="attach-chip" data-id="${img.id}" title="${escapeHtml(img.name)} · ${img.width}×${img.height}">
+      <img src="${img.thumb}" alt="${escapeHtml(img.name)}" />
+      <button type="button" class="attach-remove" aria-label="Remove screenshot">&times;</button>
+    </div>`).join("") +
+    (pendingImages.length ? `<span class="attach-count">${pendingImages.length}/${MAX_ATTACHMENTS} · sent to the vision model</span>` : "");
+  tray.querySelectorAll(".attach-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.closest(".attach-chip").dataset.id;
+      pendingImages = pendingImages.filter(i => i.id !== id);
+      renderAttachTray();
+    });
+  });
+}
+
+function updateImageButton() {
+  const btn = document.getElementById("btn-add-image");
+  if (!btn) return;
+  btn.classList.toggle("unavailable", !visionAvailable);
+  btn.title = visionAvailable
+    ? "Attach screenshots (or paste / drop them)"
+    : "Screenshots need the vision model: ollama pull qwen3-vl:8b-instruct";
+}
+
+function initAttachments() {
+  const btn = document.getElementById("btn-add-image");
+  const input = document.getElementById("image-input");
+  const promptInput = document.getElementById("prompt-input");
+  const capsule = document.querySelector(".input-capsule");
+
+  if (btn && input) {
+    btn.addEventListener("click", () => input.click());
+    input.addEventListener("change", () => {
+      addImageFiles(input.files);
+      input.value = "";
+    });
+  }
+
+  // Paste a screenshot straight from the clipboard (e.g. Cmd+Shift+Ctrl+4, then Cmd+V)
+  promptInput.addEventListener("paste", (e) => {
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter(f => f.type.startsWith("image/"));
+    if (files.length) {
+      e.preventDefault();
+      addImageFiles(files);
+    }
+  });
+
+  // Drag and drop onto the composer
+  const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+  let dragDepth = 0;
+  if (capsule) {
+    capsule.addEventListener("dragenter", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      capsule.classList.add("dragging");
+    });
+    capsule.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+    capsule.addEventListener("dragleave", () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) capsule.classList.remove("dragging");
+    });
+    capsule.addEventListener("drop", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      capsule.classList.remove("dragging");
+      addImageFiles(e.dataTransfer.files);
+    });
+  }
+  // A file dropped anywhere else should not navigate away from the dashboard
+  window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (!capsule || !capsule.contains(e.target)) addImageFiles(e.dataTransfer.files);
+  });
+  updateImageButton();
+}
+
 function autoResizeTextarea(el) {
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, 140) + "px";
@@ -344,6 +520,9 @@ async function initHealth() {
     const data = await res.json();
 
     webSearchAllowed = data.web_search_allowed !== false;
+    computerAllowed = data.computer_access_allowed !== false;
+    visionAvailable = data.vision_available !== false;
+    updateImageButton();
     updateComposerMode();
 
     const pillVerdict = document.getElementById("pill-verdict");
@@ -435,6 +614,29 @@ function webSearchActive() {
   return isFreeMode() && webSearchAllowed && webSearchOn;
 }
 
+// Computer access: read-only tools on this machine, No-workspace mode only, off by default
+let computerAllowed = true;
+let computerOn = false;
+try { computerOn = localStorage.getItem("clearsky_computer") === "1"; } catch (e) {}
+
+function computerActive() {
+  return isFreeMode() && computerAllowed && computerOn;
+}
+
+function composerToggle(id, iconSvg, label, onClick, insertAfter) {
+  let btn = document.getElementById(id);
+  if (!btn && insertAfter) {
+    btn = document.createElement("button");
+    btn.id = id;
+    btn.className = "input-action-btn composer-toggle";
+    btn.type = "button";
+    btn.innerHTML = `${iconSvg}<span class="composer-toggle-label">${label}</span>`;
+    btn.addEventListener("click", onClick);
+    insertAfter.parentNode.insertBefore(btn, insertAfter.nextSibling);
+  }
+  return btn;
+}
+
 function updateComposerMode() {
   const free = isFreeMode();
   const pillText = document.getElementById("policy-pill-text");
@@ -467,13 +669,36 @@ function updateComposerMode() {
     if (label) label.textContent = webSearchOn ? "Web on" : "Web";
   }
 
+  const compBtn = composerToggle(
+    "btn-computer",
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+    "Computer",
+    () => {
+      computerOn = !computerOn;
+      try { localStorage.setItem("clearsky_computer", computerOn ? "1" : "0"); } catch (e) {}
+      updateComposerMode();
+    },
+    btn || pill
+  );
+  if (compBtn) {
+    compBtn.style.display = free && computerAllowed ? "" : "none";
+    compBtn.setAttribute("aria-pressed", computerOn ? "true" : "false");
+    compBtn.classList.toggle("on", computerOn);
+    compBtn.title = computerOn
+      ? "Computer access on: the model can run read-only commands and read files on this Mac (keys, passwords and browser data are blocked)"
+      : "Computer access off: turn on to let the model look things up on this Mac";
+    compBtn.querySelector(".composer-toggle-label").textContent = computerOn ? "Computer on" : "Computer";
+  }
+
   const note = document.getElementById("input-footer-note");
   if (note) {
     note.textContent = !free
       ? "Runs entirely on this machine. No prompts, code, or telemetry reach a cloud API."
       : webSearchActive()
         ? "Web search on: your message is sent to a search engine (DuckDuckGo, then Wikipedia). Repository code and ADRs never leave this machine."
-        : "No workspace: policy checks are off. Everything still runs on this machine.";
+        : computerActive()
+          ? "Computer access on: the model can run read-only commands and read files here. Keys, passwords and browser data stay blocked."
+          : "No workspace: policy checks are off. Everything still runs on this machine.";
   }
 }
 
@@ -1164,7 +1389,7 @@ function recordTurn(promptText, data) {
   saveThreads();
 }
 
-async function runWithPrompt(promptText, presetTitle = null) {
+async function runWithPrompt(promptText, presetTitle = null, images = []) {
   document.getElementById("hero-view").style.display = "none";
   const messagesStream = document.getElementById("messages-stream");
   messagesStream.style.display = "flex";
@@ -1190,7 +1415,10 @@ async function runWithPrompt(promptText, presetTitle = null) {
   // 1. Append User Message Bubble
   const userMsg = document.createElement("div");
   userMsg.className = "message-user";
-  userMsg.innerHTML = `<div class="message-user-content">${escapeHtml(promptText)}</div>`;
+  const thumbs = images.length
+    ? `<div class="message-user-images">${images.map(i => `<img src="${i.thumb}" alt="${escapeHtml(i.name)}" title="${escapeHtml(i.name)} · ${i.width}×${i.height}" />`).join("")}</div>`
+    : "";
+  userMsg.innerHTML = `${thumbs}<div class="message-user-content">${escapeHtml(promptText)}</div>`;
   messagesStream.appendChild(userMsg);
 
   // 2. Live run card: steps, reasoning and output stream in as they happen
@@ -1228,6 +1456,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
         </button>
         <div class="live-thinking-box" data-live="think"></div>
       </div>
+      <ol class="live-tools" data-live="tools" hidden></ol>
       <div class="live-output">
         <div class="live-output-head">
           <span data-live="out-label">Output</span>
@@ -1281,6 +1510,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
   // Visible output: hide <think> blocks and markdown fences, keep everything else verbatim
   const visibleOutput = (text) => text
     .replace(/<think>[\s\S]*?(<\/think>|$)/g, "")
+    .replace(/<tool>[\s\S]*?(<\/tool>|$)/g, "")
     .replace(/^\s*```[\w+#.-]*\s*$/gm, "")
     .replace(/^\n+/, "")
     .replace(/\s+$/, "");
@@ -1335,6 +1565,33 @@ async function runWithPrompt(promptText, presetTitle = null) {
     setStep(3, "active", "Streaming output");
   };
 
+  // Tool calls (computer access): one row per call, updated when it finishes
+  const toolsList = $live("tools");
+  const renderLiveTool = (evt) => {
+    toolsList.hidden = false;
+    let row = toolsList.querySelector(`[data-tool="${evt.id}"]`);
+    if (!row) {
+      row = document.createElement("li");
+      row.className = "live-tool running";
+      row.dataset.tool = evt.id;
+      row.innerHTML = `<span class="live-tool-dot"></span><code class="live-tool-cmd">${escapeHtml(describeToolCall(evt))}</code><span class="live-tool-result">running…</span>`;
+      toolsList.appendChild(row);
+      // The text that carried the tool call is not part of the answer
+      rawOut = "";
+      outBox.innerHTML = '<span class="live-wait"><i></i><i></i><i></i><span>reading the result</span></span>';
+      live.dataset.phase = "tool";
+      $live("phase").textContent = `Looking it up: ${describeToolCall(evt)}`;
+      setStep(3, "active", `Running ${evt.name === "run_command" ? "a command" : evt.name.replace("_", " ")}`);
+    }
+    if (evt.status === "done") {
+      row.className = `live-tool ${evt.ok ? "ok" : "fail"}`;
+      const firstLine = (evt.ok ? evt.output : evt.error || "failed").split("\n")[0];
+      row.querySelector(".live-tool-result").textContent = firstLine.length > 90 ? firstLine.slice(0, 87) + "…" : firstLine;
+      setPhase("wait", `Reading the result with ${modelName}…`);
+    }
+    followStream();
+  };
+
   // Live stopwatch, token counter and speed
   const timerInterval = setInterval(() => {
     $live("timer").textContent = ((Date.now() - startTime) / 1000).toFixed(1) + "s";
@@ -1369,9 +1626,17 @@ async function runWithPrompt(promptText, presetTitle = null) {
       const res = await fetch("/api/run/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive() }),
+        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64) }),
         signal: controller.signal
       });
+
+      if (res.status === 400) {
+        // Rejected input (e.g. a bad screenshot): show why instead of retrying
+        const err = await res.json().catch(() => ({}));
+        const rejected = new Error(err.detail || "The request was rejected.");
+        rejected.rejected = true;
+        throw rejected;
+      }
 
       if (res.ok && res.body) {
         const reader = res.body.getReader();
@@ -1395,7 +1660,13 @@ async function runWithPrompt(promptText, presetTitle = null) {
                 if (evt.free) {
                   live.dataset.free = "1";
                   setStep(1, "done skipped", "No workspace attached");
-                  setStep(2, "done skipped", evt.web_search ? "Checks off · web search on" : `Checks off${evt.history_turns ? ` · ${evt.history_turns} earlier turns` : ""}`);
+                  const extras = [
+                    evt.web_search ? "web search on" : "",
+                    evt.computer === "on" ? "computer access on" : "",
+                    evt.computer === "remote" ? "computer access is local-only" : "",
+                    evt.history_turns ? `${evt.history_turns} earlier turns` : "",
+                  ].filter(Boolean).join(" · ");
+                  setStep(2, "done skipped", `Checks off${extras ? ` · ${extras}` : ""}`);
                   $live("out-label").textContent = "Answer";
                   outBox.classList.add("prose");
                 } else {
@@ -1408,7 +1679,12 @@ async function runWithPrompt(promptText, presetTitle = null) {
                   $live("out-label").textContent = "Patch draft";
                   if (evt.target_file) $live("file").textContent = evt.target_file;
                 }
-                setStep(3, "active", `Loading ${modelName}`);
+                if (evt.images) {
+                  const noun = evt.images === 1 ? "screenshot" : `${evt.images} screenshots`;
+                  setStep(3, "active", `Reading ${noun} with ${modelName}${evt.vision_routed ? " (vision)" : ""}`);
+                } else {
+                  setStep(3, "active", `Loading ${modelName}`);
+                }
                 setPhase("wait", `Waiting for ${modelName}…`);
               } else if (evt.type === "search") {
                 const msg = {
@@ -1441,6 +1717,8 @@ async function runWithPrompt(promptText, presetTitle = null) {
                   startWriting();
                 }
                 queuePaint();
+              } else if (evt.type === "tool") {
+                renderLiveTool(evt);
               } else if (evt.type === "finished") {
                 data = evt;
               }
@@ -1451,6 +1729,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
         }
       }
     } catch (streamErr) {
+      if (streamErr.rejected) throw streamErr;
       if (!stopped) console.warn("Streaming request failed, falling back to /api/run:", streamErr);
     }
 
@@ -1470,7 +1749,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive() })
+        body: JSON.stringify({ prompt: promptText, history: threadHistory(), web_search: webSearchActive(), computer: computerActive(), images: images.map(i => i.base64) })
       });
       data = await res.json();
     }
@@ -1487,7 +1766,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
 
     // Render response into assistantMsg
     renderAssistantResponse(assistantMsg, data, promptText);
-    recordTurn(promptText, data);
+    recordTurn(images.length ? `[${images.length} screenshot${images.length === 1 ? "" : "s"} attached] ${promptText}` : promptText, data);
 
     if (currentAppMode === "diff") {
       const diffView = document.getElementById("diff-inspector-view");
@@ -1495,7 +1774,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
     }
   } catch (e) {
     console.error("Run error:", e);
-    assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">Execution Error</span><span>${escapeHtml(e.message)}</span></div>`;
+    assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">${e.rejected ? "Couldn't send that" : "Execution Error"}</span><span class="banner-body">${escapeHtml(e.message)}</span></div>`;
   } finally {
     clearInterval(timerInterval);
     document.removeEventListener("keydown", onEsc);
@@ -1544,6 +1823,28 @@ function renderWebSources(web) {
     </div>`;
 }
 
+function describeToolCall(t) {
+  const args = t.args || {};
+  if (t.name === "run_command") return `$ ${args.command || ""}`;
+  if (t.name === "read_file") return `read ${args.path || ""}`;
+  if (t.name === "list_dir") return `ls ${args.path || "~"}`;
+  return `${t.name} ${JSON.stringify(args)}`;
+}
+
+function renderComputerTools(computer) {
+  if (!computer || !computer.tools || !computer.tools.length) return "";
+  const rows = computer.tools.map(t => `
+    <details class="tool-log-item ${t.ok ? "ok" : "fail"}">
+      <summary><span class="live-tool-dot"></span><code>${escapeHtml(describeToolCall(t))}</code><span class="tool-log-ms">${Math.round(t.latency_ms || 0)}ms</span></summary>
+      <pre>${escapeHtml(t.ok ? t.output : t.error)}</pre>
+    </details>`).join("");
+  return `
+    <div class="tool-log">
+      <div class="tool-log-title">Looked up on this computer · ${computer.tools.length} ${computer.tools.length === 1 ? "step" : "steps"} · read-only</div>
+      ${rows}
+    </div>`;
+}
+
 function renderFreeResponse(container, data) {
   const a = data.aegis || {};
   const card = document.createElement("div");
@@ -1563,10 +1864,11 @@ function renderFreeResponse(container, data) {
     </div>
     ${reasoning}
     <div class="explain-body">${a.text ? renderMarkdownLite(a.text) : "No answer returned"}</div>
+    ${renderComputerTools(data.computer)}
     ${renderWebSources(data.web)}
     <div class="unified-card-footer">
       <span style="font-size:12.5px; color:var(--text-muted);">
-        No ADRs, bans or habits were applied and nothing was written to disk${data.web && data.web.status === "ok" ? "; your message was sent to a search engine" : ""}. Attach a workspace to turn governance back on.
+        No ADRs, bans or habits were applied and nothing was written to disk${data.web && data.web.status === "ok" ? "; your message was sent to a search engine" : ""}${data.computer && data.computer.status === "remote" ? ". Computer access only works from this machine's own browser" : ""}. Attach a workspace to turn governance back on.
       </span>
     </div>
   `;
