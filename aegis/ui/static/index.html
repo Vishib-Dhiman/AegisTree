@@ -1,371 +1,326 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="day">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ClearSky — Sovereign AI Second Brain</title>
+  <title>ClearSky — AI without the cloud</title>
   <link rel="icon" type="image/png" href="logo-icon.png">
-  <link rel="stylesheet" href="style.css?v=2.2">
+  <script>
+    (function () {
+      var t = new URLSearchParams(location.search).get("theme");
+      try { t = t || localStorage.getItem("clearsky_theme"); } catch (e) {}
+      if (t === "night") document.documentElement.setAttribute("data-theme", "night");
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
-  <style>
-    /* In-Flow Layout Overrides: Guarantees no overlay/occlusion regardless of CSS cache */
-    .app-layout {
-      display: flex !important;
-      width: 100vw !important;
-      height: 100vh !important;
-      position: relative !important;
-      overflow: hidden !important;
-    }
-    .main-content {
-      display: flex !important;
-      flex-direction: column !important;
-      height: 100vh !important;
-      min-height: 0 !important;
-      min-width: 0 !important;
-      overflow: hidden !important;
-      position: relative !important;
-      flex: 1 1 0% !important;
-    }
-    .top-nav {
-      flex-shrink: 0 !important;
-      height: 56px !important;
-    }
-    .chat-viewport {
-      flex: 1 1 0% !important;
-      min-height: 0 !important;
-      width: 100% !important;
-      overflow-y: auto !important;
-      overflow-x: hidden !important;
-      padding: 24px 20px 32px !important;
-      scroll-behavior: smooth !important;
-      scrollbar-width: thin !important;
-      scrollbar-color: rgba(255, 255, 255, 0.3) transparent !important;
-      -webkit-overflow-scrolling: touch !important;
-    }
-    .chat-viewport::-webkit-scrollbar {
-      width: 8px !important;
-      display: block !important;
-    }
-    .chat-viewport::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.3) !important;
-      border-radius: 4px !important;
-    }
-    .input-area {
-      position: relative !important;
-      bottom: auto !important;
-      left: auto !important;
-      right: auto !important;
-      flex-shrink: 0 !important;
-      width: 100% !important;
-      padding: 12px 24px 16px !important;
-      background: rgba(13, 15, 18, 0.98) !important;
-      border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
-      display: flex !important;
-      flex-direction: column !important;
-      align-items: center !important;
-      pointer-events: auto !important;
-      z-index: 15 !important;
-    }
-    .input-capsule {
-      max-width: 740px !important;
-      width: 100% !important;
-      border-radius: 18px !important;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
-    }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=3.5">
 </head>
-<body class="dark-theme">
+<body>
 
-  <!-- Main App Layout (Sidebar + Chat Area) -->
+  <!-- Sky backdrop: gradient, sun glow, stars (night) -->
+  <div class="sky" aria-hidden="true">
+    <div class="sky-glow"></div>
+    <div class="sky-stars"></div>
+  </div>
+
   <div class="app-layout">
 
-    <!-- Left AI Lab Sidebar (ChatGPT/Claude/Gemini Style) -->
+    <!-- ============ Sidebar ============ -->
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">
         <div class="brand">
-          <img src="logo-icon.png" class="brand-logo" alt="ClearSky" />
-          <span class="brand-name">ClearSky</span>
-          <span class="brand-badge">OG</span>
+          <img src="logo-icon.png" class="brand-logo" alt="" />
+          <div class="brand-text">
+            <span class="brand-name">Clear<span class="brand-name-accent">Sky</span></span>
+            <span class="brand-tagline">AI without the cloud.</span>
+          </div>
         </div>
-        <button id="btn-toggle-sidebar" class="icon-btn" title="Toggle Sidebar">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        <button id="btn-toggle-sidebar" class="icon-btn" title="Collapse sidebar" aria-label="Collapse sidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/><path d="M15 10l-2 2 2 2"/></svg>
         </button>
       </div>
 
       <button id="btn-new-session" class="new-chat-btn">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-        <span>New Architecture Task</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        <span>New task</span>
         <kbd>⌘K</kbd>
       </button>
 
-      <div class="sidebar-nav">
+      <nav class="sidebar-nav">
         <div class="nav-item active" id="nav-chat">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span>Chat &amp; Synthesis</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
+          <span>Workspace</span>
         </div>
         <div class="nav-item" id="nav-memory">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>Memory &amp; Graph</span>
-          <span id="badge-habits-count" class="nav-badge">0</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8M16 7.5l-3 8M8.5 6h7"/></svg>
+          <span>Memory graph</span>
+          <span class="nav-badge-wrap" title="Learned habits"><span id="badge-habits-count" class="nav-badge">0</span></span>
         </div>
-      </div>
+      </nav>
 
       <div class="sidebar-scrollable">
-        <div class="sidebar-section-title" id="threads-section-title" style="display: none; justify-content: space-between; align-items: center;">
-          <span>Recent Tasks</span>
+        <div class="sidebar-section-title" id="threads-section-title" style="display: none;">
+          <span>Recent</span>
           <button id="btn-clear-threads" class="btn-clear-tasks-link" title="Clear all recent tasks">Clear</button>
         </div>
         <div class="threads-list" id="threads-list"></div>
       </div>
 
-      <!-- Scenarios Dropdown Row (Positioned just above Vishib footer) -->
+      <!-- Rehearsed scenarios (opens upward) -->
       <div class="sidebar-scenarios-row">
         <div class="scenarios-dropdown-container" id="scenarios-dropdown-container">
-          <button id="btn-scenarios-dropdown" class="btn-scenarios-trigger full-width" title="Rehearsed Pitch Scenarios">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 14px;">🎯</span>
-              <span style="font-weight: 500;">Rehearsed Scenarios</span>
-            </div>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          <button id="btn-scenarios-dropdown" class="btn-scenarios-trigger" title="Rehearsed demo scenarios">
+            <span class="scn-trigger-left">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg>
+              <span>Demo scenarios</span>
+            </span>
+            <svg class="scn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 15l6-6 6 6"/></svg>
           </button>
 
           <div class="scenarios-dropdown-menu" id="scenarios-dropdown-menu" style="display: none;">
             <div class="scenarios-dropdown-header">
-              <span>Rehearsed Pitch Scenarios</span>
+              <span>Rehearsed scenarios</span>
             </div>
             <div class="scenarios-dropdown-list">
+              <div class="scn-group-label">Northwind vault</div>
               <div class="recent-item" data-prompt="persist">
-                <span class="recent-icon">🔐</span>
-                <span class="recent-text">Persist Token (ADR-014)</span>
+                <i class="scn-dot ok"></i><span class="recent-text">Persist session token</span><span class="scn-tag">ADR-014</span>
               </div>
               <div class="recent-item" data-prompt="rotate">
-                <span class="recent-icon">⚡</span>
-                <span class="recent-text">Rotate Token (Habit)</span>
+                <i class="scn-dot habit"></i><span class="recent-text">Rotate token</span><span class="scn-tag">habit</span>
               </div>
               <div class="recent-item danger" data-prompt="force_legacy">
-                <span class="recent-icon">🛡️</span>
-                <span class="recent-text">Force Legacy (Refusal)</span>
+                <i class="scn-dot block"></i><span class="recent-text">Force legacy_wrap</span><span class="scn-tag">refusal</span>
               </div>
+
+              <div class="scn-group-label">pyca/cryptography</div>
               <div class="recent-item" data-prompt="pyca_oaep">
-                <span class="recent-icon">🔑</span>
-                <span class="recent-text">PyCA RSA OAEP (ADR-021)</span>
+                <i class="scn-dot ok"></i><span class="recent-text">RSA with OAEP</span><span class="scn-tag">ADR-021</span>
               </div>
               <div class="recent-item danger" data-prompt="pyca_pkcs">
-                <span class="recent-icon">🚫</span>
-                <span class="recent-text">PyCA Force PKCS1 (Refusal)</span>
+                <i class="scn-dot block"></i><span class="recent-text">Force PKCS1v15</span><span class="scn-tag">refusal</span>
               </div>
+
+              <div class="scn-group-label">pydantic</div>
               <div class="recent-item" data-prompt="pydantic_v2">
-                <span class="recent-icon">📦</span>
-                <span class="recent-text">Pydantic v2 (ADR-032)</span>
+                <i class="scn-dot ok"></i><span class="recent-text">Serialize with v2</span><span class="scn-tag">ADR-032</span>
               </div>
               <div class="recent-item danger" data-prompt="pydantic_v1">
-                <span class="recent-icon">🚫</span>
-                <span class="recent-text">Pydantic Force .dict()</span>
+                <i class="scn-dot block"></i><span class="recent-text">Force .dict()</span><span class="scn-tag">refusal</span>
               </div>
+
+              <div class="scn-group-label">sqlalchemy</div>
               <div class="recent-item" data-prompt="db_sqlalchemy">
-                <span class="recent-icon">🗄️</span>
-                <span class="recent-text">SQLAlchemy 2.0 (ADR-045)</span>
+                <i class="scn-dot ok"></i><span class="recent-text">SQLAlchemy 2.0 query</span><span class="scn-tag">ADR-045</span>
               </div>
               <div class="recent-item danger" data-prompt="db_engine">
-                <span class="recent-icon">🚫</span>
-                <span class="recent-text">SQL Force engine.execute</span>
+                <i class="scn-dot block"></i><span class="recent-text">Force engine.execute</span><span class="scn-tag">refusal</span>
               </div>
+
+              <div class="scn-group-label">Edge cases</div>
               <div class="recent-item" data-prompt="kyber">
-                <span class="recent-icon">⚛️</span>
-                <span class="recent-text">Migrate Kyber (Abstention)</span>
+                <i class="scn-dot haze"></i><span class="recent-text">Migrate to Kyber</span><span class="scn-tag">abstain</span>
               </div>
               <div class="recent-item" data-prompt="explain">
-                <span class="recent-icon">📖</span>
-                <span class="recent-text">Explain Architecture</span>
+                <i class="scn-dot info"></i><span class="recent-text">Explain token storage</span><span class="scn-tag">explain</span>
               </div>
             </div>
             <div class="scenarios-dropdown-footer">
-              <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset Demo to Original Settings (deletes recent chats & memory graph)">Reset System &amp; Memory</button>
+              <button id="btn-reset-sidebar" class="reset-link-btn" title="Reset demo to original state (deletes recent chats and learned memory)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                Reset system &amp; memory
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Bottom User Profile Footer (Attached to bottom) -->
       <div class="sidebar-footer">
         <div class="user-profile">
           <div class="user-avatar">VD</div>
           <div class="user-info">
             <span class="user-name">Vishib</span>
-            <span class="user-status">100% Air-Gapped (127.0.0.1)</span>
+            <span class="user-status"><i class="live-dot"></i>Air-gapped · 127.0.0.1</span>
           </div>
         </div>
       </div>
     </aside>
 
-    <!-- Main Content Area -->
+    <!-- ============ Main ============ -->
     <main class="main-content">
 
-      <!-- Top Header Navigation -->
       <header class="top-nav">
         <div class="top-nav-left">
-          <button id="btn-expand-sidebar" class="icon-btn-ghost" title="Expand Sidebar">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          <button id="btn-expand-sidebar" class="icon-btn" title="Expand sidebar" aria-label="Expand sidebar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/><path d="M13 10l2 2-2 2"/></svg>
           </button>
-          <div class="model-capsule">
+          <label class="model-capsule" title="System 2 — local generative model">
+            <span class="model-capsule-kicker">System 2</span>
             <span class="model-capsule-dot"></span>
-            <select id="select-model" class="model-select-dropdown" title="Select System 2 Generative Model">
+            <select id="select-model" class="model-select-dropdown">
               <option value="qwen2.5-coder:7b" selected>Qwen 2.5 Coder 7B</option>
               <option value="deepseek-r1:8b">DeepSeek R1 8B</option>
               <option value="deepseek-r1:14b">DeepSeek R1 14B</option>
             </select>
-          </div>
+            <svg class="model-capsule-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </label>
         </div>
 
         <div class="top-nav-center">
-          <div class="mode-switcher-pill">
+          <div class="mode-switcher-pill" role="tablist">
             <button id="btn-mode-chat" class="mode-pill-btn active">Chat</button>
-            <button id="btn-toggle-diff-mode" class="mode-pill-btn">Diff Inspector</button>
-            <button id="btn-toggle-graph-view" class="mode-pill-btn">Visual Graph</button>
+            <button id="btn-toggle-diff-mode" class="mode-pill-btn">Diff inspector</button>
+            <button id="btn-toggle-graph-view" class="mode-pill-btn">Memory graph</button>
           </div>
         </div>
 
         <div class="top-nav-right">
-          <span id="pill-verdict" class="status-badge green">
-            <span class="badge-dot"></span> Verdict v1.4 (32ms)
-          </span>
-          <span id="pill-ollama" class="status-badge green">
-            <span class="badge-dot"></span> Local SLM
-          </span>
-          <span class="status-badge blue">
-            🛡️ 0 Network Egress
-          </span>
+          <div class="status-cluster">
+            <span id="pill-verdict" class="status-badge green"><span class="badge-dot"></span> Verdict v1.4 (32ms)</span>
+            <span id="pill-ollama" class="status-badge green"><span class="badge-dot"></span> Local SLM</span>
+            <span class="status-badge blue egress-badge" title="No packets leave this machine">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              0 egress
+            </span>
+          </div>
+          <button id="btn-theme-toggle" class="icon-btn theme-toggle" title="Switch between day and night sky" aria-label="Toggle theme">
+            <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+            <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+          </button>
         </div>
       </header>
 
-      <!-- Scrollable Message Stream -->
       <section id="chat-viewport" class="chat-viewport">
 
-        <!-- Welcome Hero View (ChatGPT / Claude / Gemini Style) -->
+        <!-- Welcome -->
         <div id="hero-view" class="hero-view">
-          <div class="hero-emblem"><img src="logo-icon.png" class="hero-emblem-logo" alt="ClearSky" /></div>
-          <h1 class="hero-title">What architectural task shall we solve today?</h1>
-          <p class="hero-subtitle">
-            Dual-Engine Sovereign Second Brain. System 1 (openJev Verdict v1.4) enforces active architectural decisions before local SLM generation.
-          </p>
+          <div class="hero-emblem">
+            <span class="hero-emblem-halo"></span>
+            <img src="logo-icon.png" class="hero-emblem-logo" alt="ClearSky" />
+          </div>
+          <h1 class="hero-title greeting" id="hero-greeting" aria-live="polite">Hello there.</h1>
+          <p class="hero-subtitle greeting-sub" id="hero-greeting-sub">What should we build today?</p>
         </div>
 
-        <!-- Dynamic Message Stream -->
-        <div id="messages-stream" class="messages-stream" style="display: none;">
-          <!-- Injected dynamically by app.js -->
-        </div>
+        <div id="messages-stream" class="messages-stream" style="display: none;"></div>
 
-        <!-- Dedicated Side-by-Side Diff Inspector View -->
-        <div id="diff-inspector-view" class="diff-inspector-view" style="display: none;">
-          <!-- Injected dynamically by app.js -->
-        </div>
-
+        <div id="diff-inspector-view" class="diff-inspector-view" style="display: none;"></div>
       </section>
 
-      <!-- Floating Bottom Input Capsule (ChatGPT / Claude / Gemini Style) -->
+      <!-- Horizon hills echo the logo -->
+      <svg class="horizon" viewBox="0 0 1440 220" preserveAspectRatio="none" aria-hidden="true">
+        <path class="horizon-back" d="M0 150 C 220 70, 420 60, 640 120 S 1040 190, 1440 90 L1440 220 L0 220 Z"/>
+        <path class="horizon-mid" d="M0 175 C 260 120, 520 130, 760 165 S 1180 200, 1440 150 L1440 220 L0 220 Z"/>
+        <path class="horizon-front" d="M0 200 C 300 170, 620 180, 900 198 S 1260 212, 1440 196 L1440 220 L0 220 Z"/>
+      </svg>
+
       <footer class="input-area">
         <div class="input-capsule">
           <div class="input-toolbar-top" id="input-toolbar-top" style="display: none;">
             <div class="active-decision-indicator">
-              <span class="indicator-icon">⚖️</span>
               <span id="active-decision-label">Policy: ADR-014 (in force)</span>
             </div>
           </div>
 
-          <textarea id="prompt-input" class="chat-textarea" placeholder="Ask ClearSky to implement functions, refactor schemas, or test policies..." rows="1"></textarea>
+          <textarea id="prompt-input" class="chat-textarea" placeholder="Describe a change — e.g. “Add a rotate_session_token function using our vault standard”" rows="1"></textarea>
 
           <div class="input-toolbar-bottom">
             <div class="toolbar-left">
-              <button class="input-action-btn" id="btn-attach" title="Change Repository Scope">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              <button class="input-action-btn" id="btn-attach" title="Change repository scope">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
                 <span id="workspace-label">demo_vault</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <div class="toolbar-pill">
                 <span class="sparkle-mini">✦</span>
-                <span>Verdict Engine active</span>
+                <span>Policy gate on</span>
               </div>
             </div>
 
             <div class="toolbar-right">
-              <button id="btn-run" class="send-btn" title="Send (Enter)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              <span class="send-hint"><kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline</span>
+              <button id="btn-run" class="send-btn" title="Send (Enter)" aria-label="Send">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
               </button>
             </div>
           </div>
         </div>
         <div class="input-footer-note">
-          ClearSky enforces sovereign air-gapped governance. No tokens are transmitted to cloud APIs.
+          Runs entirely on this machine. No prompts, code, or telemetry reach a cloud API.
         </div>
       </footer>
-
     </main>
 
-    <!-- Slide-over Memory & Knowledge Graph Drawer -->
+    <!-- ============ Memory drawer ============ -->
     <div id="memory-drawer" class="memory-drawer">
       <div class="drawer-header">
         <div>
-          <h2 class="drawer-title">Temporal Memory Graph</h2>
-          <span class="drawer-subtitle">Bi-temporal lineage &middot; valid_from &middot; deprecated_at</span>
+          <h2 class="drawer-title">Temporal memory</h2>
+          <span class="drawer-subtitle">Decisions, bans and habits over time</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <button id="btn-open-visual-graph" class="btn-xs-primary" title="Open Interactive 2D Graph Visualizer">Visual Graph</button>
-          <button id="btn-reset-drawer" class="btn-xs-danger" title="Reset all ADRs, habits, and memory graph to original defaults">Reset Graph</button>
-          <button id="btn-close-drawer" class="icon-btn-ghost">&times;</button>
+        <div class="drawer-actions">
+          <button id="btn-open-visual-graph" class="btn-xs-secondary" title="Open the interactive graph">Open graph</button>
+          <button id="btn-reset-drawer" class="btn-xs-danger" title="Reset all ADRs, habits, and memory to original defaults">Reset</button>
+          <button id="btn-close-drawer" class="icon-btn" aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
         </div>
       </div>
 
       <div class="drawer-content">
-        <div class="drawer-section">
+        <div class="drawer-section kind-active">
           <div class="drawer-section-header">
-            <h3 class="drawer-section-title">In-Force Architectural Decisions</h3>
+            <h3 class="drawer-section-title"><i class="kind-dot"></i>In-force decisions</h3>
             <button id="btn-add-adr" class="btn-xs-primary" title="Create a new Architecture Decision Record">+ New ADR</button>
           </div>
           <ul id="memory-in-force" class="memory-tree-list"></ul>
         </div>
 
-        <div class="drawer-section">
-          <h3 class="drawer-section-title">Superseded Policies (Deterministic Bans)</h3>
+        <div class="drawer-section kind-superseded">
+          <h3 class="drawer-section-title"><i class="kind-dot"></i>Superseded · enforced as bans</h3>
           <ul id="memory-superseded" class="memory-tree-list superseded"></ul>
         </div>
 
-        <div class="drawer-section">
-          <h3 class="drawer-section-title">Learned Organizational Habits</h3>
+        <div class="drawer-section kind-habit">
+          <h3 class="drawer-section-title"><i class="kind-dot"></i>Learned habits</h3>
           <ul id="memory-habits" class="memory-tree-list habits"></ul>
         </div>
 
-        <div class="drawer-section">
-          <h3 class="drawer-section-title">Team Context &amp; Knowledge</h3>
+        <div class="drawer-section kind-note">
+          <h3 class="drawer-section-title"><i class="kind-dot"></i>Team context</h3>
           <ul id="memory-notes" class="memory-tree-list notes"></ul>
         </div>
       </div>
     </div>
 
-    <!-- Interactive Bitemporal Graph Visualizer Modal -->
+    <!-- ============ Graph modal ============ -->
     <div id="graph-modal-backdrop" class="modal-backdrop" style="display: none; z-index: 1200;">
       <div class="graph-modal-dialog">
         <div class="graph-modal-header">
           <div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <h3 class="adr-modal-title">Bitemporal Knowledge Graph</h3>
-              <span class="status-badge blue" id="graph-node-count-badge">Loading...</span>
+            <div class="modal-title-row">
+              <h3 class="adr-modal-title">Bi-temporal knowledge graph</h3>
+              <span class="status-badge blue" id="graph-node-count-badge">Loading…</span>
             </div>
-            <span class="drawer-subtitle">Interactive DAG: Active decisions, supersession lineage, learned habits, and project state</span>
+            <span class="drawer-subtitle">Active decisions, supersession lineage, learned habits and project notes</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <button id="btn-graph-reset-zoom" class="btn-xs-secondary">Reset View</button>
-            <button id="btn-graph-close" class="icon-btn-ghost">&times;</button>
+          <div class="modal-actions">
+            <button id="btn-graph-reset-zoom" class="btn-xs-secondary">Reset view</button>
+            <button id="btn-graph-close" class="icon-btn" aria-label="Close">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
           </div>
         </div>
         <div class="graph-modal-body">
           <svg id="memory-graph-svg" class="memory-graph-svg" width="100%" height="100%">
             <defs>
-              <pattern id="graph-grid" width="30" height="30" patternUnits="userSpaceOnUse">
-                <circle cx="15" cy="15" r="1" fill="rgba(255, 255, 255, 0.08)" />
+              <pattern id="graph-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+                <circle cx="14" cy="14" r="1" class="graph-grid-dot" />
               </pattern>
               <marker id="arrow-supersedes" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#ef4444" />
+                <path d="M 0 1.5 L 8 5 L 0 8.5 z" class="graph-arrow" />
               </marker>
             </defs>
             <rect width="100%" height="100%" fill="url(#graph-grid)" />
@@ -375,18 +330,18 @@
         </div>
         <div class="graph-modal-footer">
           <div class="graph-legend">
-            <span class="legend-item"><span class="legend-dot green"></span> In-Force Active ADR</span>
-            <span class="legend-item"><span class="legend-dot red"></span> Superseded / Banned ADR</span>
-            <span class="legend-item"><span class="legend-dot purple"></span> Learned Habit</span>
-            <span class="legend-item"><span class="legend-dot cyan"></span> Project Note</span>
-            <span class="legend-item"><span class="legend-line red"></span> Supersedes Lineage (Closure Ban)</span>
+            <span class="legend-item"><span class="legend-dot green"></span> In force</span>
+            <span class="legend-item"><span class="legend-dot red"></span> Superseded / banned</span>
+            <span class="legend-item"><span class="legend-dot purple"></span> Learned habit</span>
+            <span class="legend-item"><span class="legend-dot cyan"></span> Project note</span>
+            <span class="legend-item"><span class="legend-line red"></span> Supersedes</span>
           </div>
-          <span class="graph-footer-hint">Tip: Drag canvas to pan · Scroll to zoom · Click node to inspect details</span>
+          <span class="graph-footer-hint">Drag to pan · scroll to zoom · click a decision to open it</span>
         </div>
       </div>
     </div>
 
-    <!-- ADR Detail & Editor Modal Backdrop -->
+    <!-- ============ ADR modal ============ -->
     <div id="adr-modal-backdrop" class="modal-backdrop" style="display: none;">
       <div class="adr-modal-dialog">
         <div class="adr-modal-header">
@@ -397,11 +352,12 @@
           <div class="adr-modal-actions">
             <button id="btn-adr-toggle-edit" class="btn-xs-secondary">Edit</button>
             <button id="btn-adr-delete" class="btn-xs-danger">Delete</button>
-            <button id="btn-adr-close" class="icon-btn-ghost">&times;</button>
+            <button id="btn-adr-close" class="icon-btn" aria-label="Close">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
           </div>
         </div>
 
-        <!-- Read View -->
         <div id="adr-modal-view" class="adr-modal-body">
           <div class="adr-meta-bar">
             <div class="adr-meta-item">
@@ -424,39 +380,36 @@
           </div>
 
           <div id="adr-view-superseded-box" class="adr-section-block" style="display: none;">
-            <div class="adr-section-heading" style="color: var(--accent-red); display: flex; align-items: center; gap: 6px;">
-              <span>⚠️ Why Inactive / Superseded Rationale</span>
-            </div>
-            <div id="adr-view-superseded-reason" class="adr-decision-box" style="border-left: 3px solid var(--accent-red); background: rgba(239, 68, 68, 0.08); color: #fca5a5;"></div>
+            <div class="adr-section-heading tone-red">Why it was superseded</div>
+            <div id="adr-view-superseded-reason" class="adr-decision-box superseded"></div>
           </div>
 
           <div class="adr-literals-grid">
             <div class="adr-literals-col">
-              <div class="adr-section-heading" style="color: var(--accent-green);">Required Literals</div>
+              <div class="adr-section-heading tone-green">Required literals</div>
               <div id="adr-view-required" class="adr-tokens-list"></div>
             </div>
             <div class="adr-literals-col">
-              <div class="adr-section-heading" style="color: var(--accent-red);">Forbidden Literals</div>
+              <div class="adr-section-heading tone-red">Forbidden literals</div>
               <div id="adr-view-forbidden" class="adr-tokens-list"></div>
             </div>
           </div>
 
           <div class="adr-section-block">
-            <div class="adr-section-heading">Full Specification Markdown</div>
+            <div class="adr-section-heading">Full specification</div>
             <pre id="adr-view-raw" class="adr-raw-code-box"></pre>
           </div>
         </div>
 
-        <!-- Edit / Create Form View -->
         <div id="adr-modal-edit" class="adr-modal-body" style="display: none;">
           <div id="adr-create-filename-row" class="adr-field-group" style="display: none;">
             <label class="adr-field-label">Filename (in docs/adr/)</label>
             <input id="adr-edit-filename" class="adr-text-input" placeholder="046-my-decision.md" spellcheck="false" />
           </div>
-          <div class="adr-field-group" style="flex: 1 1 auto; display: flex; flex-direction: column;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <label class="adr-field-label" style="margin-bottom: 0;">ADR Markdown Content</label>
-              <div id="adr-prompt-badge" class="adr-prompt-indicator" title="Type /prompt <instructions> then press Enter to generate with local SLM">
+          <div class="adr-field-group adr-field-grow">
+            <div class="adr-field-label-row">
+              <label class="adr-field-label">ADR markdown</label>
+              <div id="adr-prompt-badge" class="adr-prompt-indicator" title="Type /prompt <instructions> then press Enter to generate with the local SLM">
                 <span class="adr-prompt-sparkle">✨</span> Type <code>/prompt &lt;instruction&gt;</code> + Enter to AI generate
               </div>
             </div>
@@ -474,34 +427,36 @@
       </div>
     </div>
 
-    <!-- Workspace / Repository Selector Modal -->
+    <!-- ============ Workspace modal ============ -->
     <div id="workspace-modal-backdrop" class="modal-backdrop" style="display: none;">
-      <div class="adr-modal-dialog" style="max-width: 620px;">
+      <div class="adr-modal-dialog workspace-dialog">
         <div class="adr-modal-header">
           <div class="adr-modal-title-area">
             <span class="status-badge blue">Scope</span>
-            <h3 class="adr-modal-title">Select Repository Scope</h3>
+            <h3 class="adr-modal-title">Choose a repository</h3>
           </div>
-          <button id="btn-workspace-close" class="icon-btn-ghost">&times;</button>
+          <button id="btn-workspace-close" class="icon-btn" aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
         </div>
-        <div class="adr-modal-body" style="padding: 20px 24px;">
-          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;">
-            Choose a demo repository or enter any directory path on disk. System 1 will ingest its unique ADRs, knowledge graph, and production code.
+        <div class="adr-modal-body workspace-body">
+          <p class="workspace-intro">
+            Pick a demo repository or point at any directory. System 1 ingests its ADRs, knowledge graph and production code.
           </p>
 
           <div id="workspace-presets-container" class="workspace-grid"></div>
 
           <div class="adr-field-group">
-            <label class="adr-field-label">Or Custom Repository Path</label>
-            <div style="display: flex; gap: 8px;">
-              <input id="workspace-path-input" class="adr-text-input" style="flex: 1;" placeholder="/absolute/path/to/repo or relative_path" spellcheck="false" />
+            <label class="adr-field-label">Or a custom path</label>
+            <div class="workspace-path-row">
+              <input id="workspace-path-input" class="adr-text-input" placeholder="/absolute/path/to/repo or relative_path" spellcheck="false" />
               <button id="btn-workspace-switch" class="btn-xs-primary">Switch</button>
             </div>
           </div>
 
-          <div id="workspace-status-info" style="margin-top: 10px; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);"></div>
+          <div id="workspace-status-info" class="workspace-status"></div>
         </div>
-        <div class="adr-edit-footer" style="padding: 12px 24px;">
+        <div class="adr-edit-footer">
           <button id="btn-workspace-cancel" class="btn-xs-secondary">Close</button>
         </div>
       </div>
@@ -509,6 +464,6 @@
 
   </div>
 
-  <script src="app.js?v=2.8"></script>
+  <script src="app.js?v=3.2"></script>
 </body>
 </html>

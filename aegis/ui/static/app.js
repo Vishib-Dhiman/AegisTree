@@ -43,7 +43,68 @@ document.addEventListener("DOMContentLoaded", () => {
   initVisualGraph();
   initThreads();
   initEventListeners();
+  initTheme();
+  initGreeting();
 });
+
+// Welcome greeting: picks a fresh, time-aware line on every load
+const GREETINGS = {
+  morning: ["Good morning, {name}.", "Morning, {name}. Clear skies ahead.", "Rise and ship, {name}.", "Fresh coffee, fresh code, {name}."],
+  afternoon: ["Good afternoon, {name}.", "Hey {name}, what are we building?", "Afternoon, {name}. Keep it rolling."],
+  evening: ["Good evening, {name}.", "Evening, {name}. Let's wrap one up.", "Golden hour, {name}. Time to ship."],
+  night: ["Burning the midnight oil, {name}?", "Hello, night owl.", "Still up, {name}? Let's make it count."],
+  any: ["Hello there, {name}.", "Hi {name}, what's on the list?", "Welcome back, {name}.", "Ready when you are, {name}.", "Hey there, {name}."]
+};
+const GREETING_SUBS = [
+  "What should we build today?",
+  "Describe a change and I'll check it against your decisions first.",
+  "Pick up where you left off, or start something new.",
+  "Ask for a function, a refactor, or an explanation.",
+  "Everything stays on this machine. Let's get to work.",
+  "Your architecture is loaded. What's next?"
+];
+
+function initGreeting() {
+  const titleEl = document.getElementById("hero-greeting");
+  const subEl = document.getElementById("hero-greeting-sub");
+  if (!titleEl || !subEl) return;
+
+  const nameEl = document.querySelector(".user-name");
+  const name = (nameEl && nameEl.textContent.trim()) || "there";
+  const h = new Date().getHours();
+  const slot = h >= 5 && h < 12 ? "morning" : h >= 12 && h < 17 ? "afternoon" : h >= 17 && h < 22 ? "evening" : "night";
+  const pool = GREETINGS[slot].concat(GREETINGS.any);
+
+  // Avoid showing the same line twice in a row
+  let last = "";
+  try { last = localStorage.getItem("clearsky_last_greeting") || ""; } catch (e) {}
+  const choices = pool.filter(g => g !== last);
+  const line = choices[Math.floor(Math.random() * choices.length)];
+  try { localStorage.setItem("clearsky_last_greeting", line); } catch (e) {}
+  const sub = GREETING_SUBS[Math.floor(Math.random() * GREETING_SUBS.length)];
+
+  // Split into words; the user's name gets the sky gradient
+  const parts = line.split("{name}");
+  let i = 0;
+  const wordSpans = (text, accent) => text.split(/(\s+)/).filter(Boolean).map(w =>
+    /^\s+$/.test(w) ? " " : `<span class="greet-word${accent ? " accent" : ""}" style="--i:${i++}">${escapeHtml(w)}</span>`
+  ).join("");
+  titleEl.innerHTML = parts.map((p, idx) =>
+    wordSpans(p, false) + (idx < parts.length - 1 ? wordSpans(name, true) : "")
+  ).join("");
+  subEl.textContent = sub;
+  subEl.style.setProperty("--delay", `${0.25 + i * 0.07}s`);
+}
+
+function initTheme() {
+  const btn = document.getElementById("btn-theme-toggle");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const next = document.documentElement.getAttribute("data-theme") === "night" ? "day" : "night";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("clearsky_theme", next); } catch (e) {}
+  });
+}
 
 function initEventListeners() {
   const promptInput = document.getElementById("prompt-input");
@@ -163,6 +224,9 @@ function initEventListeners() {
     });
     btnExpandSidebar.style.display = "none";
   }
+  if (btnToggleSidebar && window.matchMedia("(max-width: 760px)").matches) {
+    btnToggleSidebar.click();
+  }
 
   // Mode switcher (Chat vs Diff Inspector)
   const btnModeChat = document.getElementById("btn-mode-chat");
@@ -186,6 +250,7 @@ function initEventListeners() {
     document.getElementById("messages-stream").innerHTML = "";
     promptInput.value = "";
     currentRunId = null;
+    initGreeting();
   });
 
   // Memory drawer toggle
@@ -210,6 +275,15 @@ function initEventListeners() {
 
   const btnClearThreads = document.getElementById("btn-clear-threads");
   if (btnClearThreads) btnClearThreads.addEventListener("click", clearRecentTasks);
+
+  // ⌘K / Ctrl+K starts a new task
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      document.getElementById("btn-new-session").click();
+      promptInput.focus();
+    }
+  });
 }
 
 function autoResizeTextarea(el) {
@@ -359,11 +433,11 @@ async function initWorkspace() {
           card.className = "workspace-card" + (isActive ? " active" : "");
           card.innerHTML = `
             <div class="workspace-card-header">
-              <span class="workspace-card-title">${p.icon} ${escapeHtml(p.title || p.name)}</span>
+              <span class="workspace-card-title">${escapeHtml(p.title || p.name)}</span>
               <span class="workspace-card-badge">${isActive ? "● Active" : escapeHtml(p.domain)}</span>
             </div>
             <div class="workspace-card-desc">${escapeHtml(p.desc)}</div>
-            ${p.repo_url ? `<div class="workspace-card-url" style="font-size: 11px; margin-top: 4px; word-break: break-all;"><a href="${escapeHtml(p.repo_url)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: underline;" onclick="event.stopPropagation();">${escapeHtml(p.repo_url)} ↗</a></div>` : ''}
+            ${p.repo_url ? `<div class="workspace-card-url" style="font-size: 11px; word-break: break-all;"><a href="${escapeHtml(p.repo_url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">${escapeHtml(p.repo_url)} ↗</a></div>` : ''}
             <div class="workspace-card-meta">
               <span class="workspace-card-adrs">${p.adrs.join(" &middot; ")}</span>
             </div>
@@ -892,7 +966,7 @@ async function initMemory() {
           li.innerHTML = `
             <span>${escapeHtml(item.label || item.id)}</span>
             <div class="adr-item-meta">
-              <span class="adr-item-click-hint">View / Edit →</span>
+              <span class="adr-item-click-hint">Open →</span>
             </div>
           `;
           li.addEventListener("click", () => openAdrModal(item.id));
@@ -912,7 +986,7 @@ async function initMemory() {
           li.innerHTML = `
             <span>${escapeHtml(item.label || item.id)}</span>
             <div class="adr-item-meta">
-              <span class="adr-item-click-hint">View / Edit →</span>
+              <span class="adr-item-click-hint">Open →</span>
             </div>
           `;
           li.addEventListener("click", () => openAdrModal(item.id));
@@ -1008,7 +1082,7 @@ async function runWithPrompt(promptText, presetTitle = null) {
             <span>Loading local SLM weights into memory &amp; generating compliant patch...</span>
           </div>
         </div>
-        <div id="loader-reasoning-section" style="display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+        <div id="loader-reasoning-section" style="display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);">
           <div class="reasoning-trace-label">
             <span class="spinner-orb-mini"></span>
             <span id="reasoning-status-text">Model Reasoning Trace</span>
@@ -1295,14 +1369,14 @@ function renderAssistantResponse(container, data, promptText) {
     banner.innerHTML = `
       <div class="banner-title-blocked">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        ACTION BLOCKED &mdash; SOVEREIGN REFUSAL
+        Blocked &middot; sovereign refusal
       </div>
-      <div style="font-size: 13.5px; line-height: 1.6; color: #fff;">
+      <div class="banner-body">
         ${data.block_method === "semantic"
-          ? `Request asks for superseded decision <code>${escapeHtml(data.revived_policy_id || "")}</code>, replaced by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>. <span style="color:#fca5a5;">(System 1 revival check, p=${(data.block_confidence || 0).toFixed(2)})</span>`
+          ? `Request asks for superseded decision <code>${escapeHtml(data.revived_policy_id || "")}</code>, replaced by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>. <span class="banner-meta">(System 1 revival check, p=${(data.block_confidence || 0).toFixed(2)})</span>`
           : `<code>${escapeHtml(data.blocked_literal || "")}</code> is forbidden by active policy <strong>${escapeHtml(data.blocking_policy_id || "")}</strong>.`}
       </div>
-      <div style="font-size: 12.5px; color: #fca5a5;">
+      <div class="banner-note">
         ClearSky physically blocked generation before model invocation because this architectural pattern has been superseded. Zero tokens wasted.
       </div>
     `;
@@ -1318,12 +1392,12 @@ function renderAssistantResponse(container, data, promptText) {
     banner.innerHTML = `
       <div class="banner-title-abstained">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        CALIBRATED ABSTENTION &mdash; OUT OF ORGANIZATIONAL SCOPE
+        Abstained &middot; outside organizational scope
       </div>
-      <div style="font-size: 13.5px; line-height: 1.6; color: #fff;">
+      <div class="banner-body">
         ${escapeHtml(data.abstain_reason || "No accepted architecture decision covers this request.")}
       </div>
-      <div style="font-size: 12.5px; color: #fde68a;">
+      <div class="banner-note">
         ClearSky refuses to hallucinate code without an in-force Architecture Decision Record (ADR).
       </div>
     `;
@@ -1341,7 +1415,7 @@ function renderAssistantResponse(container, data, promptText) {
         <span style="font-weight:600; font-size:13px;">Architecture Explanation</span>
         <span class="code-meta">${Math.round(data.aegis ? data.aegis.latency_ms : 0)} ms</span>
       </div>
-      <div style="padding: 16px 20px; font-size: 14px; line-height: 1.7; color: #e5e7eb;">
+      <div class="explain-body">
         ${escapeHtml(data.aegis ? data.aegis.text : "No explanation returned")}
       </div>
     `;
@@ -1606,7 +1680,7 @@ function renderThreadsList() {
 
     const left = document.createElement("div");
     left.className = "thread-item-left";
-    left.innerHTML = `<span class="thread-item-icon">💬</span><span class="thread-item-title" title="${escapeHtml(t.prompt || t.title)}">${escapeHtml(t.title || "Conversation")}</span>`;
+    left.innerHTML = `<span class="thread-item-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></span><span class="thread-item-title" title="${escapeHtml(t.prompt || t.title)}">${escapeHtml(t.title || "Conversation")}</span>`;
 
     const delBtn = document.createElement("button");
     delBtn.className = "thread-item-delete";
@@ -1788,7 +1862,7 @@ function attachApproveHandler(card, btnApprove, statusMsg) {
 
       if (resp.ok && resData.applied) {
         btnApprove.textContent = "Approved ✓";
-        btnApprove.style.background = "#059669";
+        btnApprove.classList.add("approved");
         if (statusMsg) {
           statusMsg.innerHTML = `<span style="color:var(--accent-green); font-weight:600;">✓ Patch Committed &middot; Receipt #${resData.receipt_id}</span>`;
         }
@@ -1949,16 +2023,16 @@ function renderDiffInspectorContent(container) {
   if (!latestRunData || (!latestRunData.aegis && !latestRunData.baseline)) {
     container.innerHTML = `
       <div class="diff-inspector-empty">
-        <div class="diff-inspector-empty-icon">🔍</div>
-        <div class="diff-inspector-empty-title">Diff Inspector Ready</div>
+        <div class="diff-inspector-empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="2"/><rect x="13" y="4" width="8" height="16" rx="2"/><path d="M6 9h2M6 13h2M16 9h2M16 13h2"/></svg></div>
+        <div class="diff-inspector-empty-title">Nothing to compare yet</div>
         <div class="diff-inspector-empty-subtext">
-          Run an architectural prompt or select a rehearsed scenario to inspect live side-by-side patch diffs.
+          Run a task and ClearSky's governed patch appears here next to what an ungoverned model would have written.
         </div>
         <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; justify-content:center;">
-          <button class="action-chip" data-prompt="persist"><span>🔐 Persist Token (ADR-014)</span></button>
-          <button class="action-chip" data-prompt="rotate"><span>⚡ Rotate Token (Habit)</span></button>
-          <button class="action-chip" data-prompt="pydantic_v2"><span>📦 Pydantic v2 (ADR-032)</span></button>
-          <button class="action-chip" data-prompt="db_sqlalchemy"><span>🗄️ SQLAlchemy (ADR-045)</span></button>
+          <button class="action-chip" data-prompt="persist"><span>Persist token · ADR-014</span></button>
+          <button class="action-chip" data-prompt="rotate"><span>Rotate token · habit</span></button>
+          <button class="action-chip" data-prompt="pydantic_v2"><span>Pydantic v2 · ADR-032</span></button>
+          <button class="action-chip" data-prompt="db_sqlalchemy"><span>SQLAlchemy · ADR-045</span></button>
         </div>
       </div>
     `;
@@ -2001,7 +2075,7 @@ function renderDiffInspectorContent(container) {
   container.innerHTML = `
     <div class="diff-inspector-header">
       <div class="diff-inspector-title-group">
-        <span class="diff-inspector-badge">✦ Side-by-Side Diff Inspector</span>
+        <span class="diff-inspector-badge">Diff inspector</span>
         <span class="diff-inspector-filename">${escapeHtml(targetFile)}</span>
         <span class="diff-inspector-policy">
           <span style="color:var(--accent-green);">●</span> ${escapeHtml(policyId)} in force
@@ -2011,7 +2085,7 @@ function renderDiffInspectorContent(container) {
         <span class="diff-inspector-pill">Baseline: ${baselineTokens} tokens</span>
         <span class="diff-inspector-pill highlight">ClearSky: ${leafTokens} tokens (-${compressionPct}%)</span>
         <span class="diff-inspector-pill">Verdict: ~${latMs}ms</span>
-        <button class="diff-return-chat-btn" id="btn-inspector-to-chat">💬 Back to Chat</button>
+        <button class="diff-return-chat-btn" id="btn-inspector-to-chat">← Back to chat</button>
       </div>
     </div>
 
@@ -2019,8 +2093,8 @@ function renderDiffInspectorContent(container) {
       <div class="diff-pane baseline">
         <div class="diff-pane-header">
           <div class="diff-pane-title">
-            <span>🚫 Raw LLM Baseline</span>
-            <span class="diff-pane-badge">Legacy Violations Possible</span>
+            <span>Ungoverned baseline</span>
+            <span class="diff-pane-badge">May revive banned code</span>
           </div>
           <span class="code-meta">${baselineTokens} tokens</span>
         </div>
@@ -2030,8 +2104,8 @@ function renderDiffInspectorContent(container) {
       <div class="diff-pane aegis">
         <div class="diff-pane-header">
           <div class="diff-pane-title">
-            <span>🛡️ ClearSky Patch</span>
-            <span class="diff-pane-badge">100% Policy Compliant</span>
+            <span>ClearSky patch</span>
+            <span class="diff-pane-badge">Policy compliant</span>
           </div>
           <span class="code-meta">${leafTokens} tokens &middot; -${compressionPct}%</span>
         </div>
@@ -2187,7 +2261,7 @@ async function loadAndRenderMemoryGraph() {
     if (badge) badge.textContent = "Error";
     if (viewport) {
       viewport.innerHTML = `
-        <text x="100" y="100" fill="#ef4444" font-size="14">Error loading knowledge graph: ${escapeHtml(err.message)}</text>
+        <text x="100" y="100" class="node-forbidden" font-size="14">Error loading knowledge graph: ${escapeHtml(err.message)}</text>
       `;
     }
   }
@@ -2211,18 +2285,19 @@ function renderMemoryGraphSvg(nodes, edges) {
 
   // 1. Column headers
   const headers = [
-    { x: COL1_X, title: "🚫 SUPERSEDED / BANNED DECISIONS", subtitle: "Epistemic Status: Superseded · Historical Precedents" },
-    { x: COL2_X, title: "🟢 IN-FORCE ACTIVE ARCHITECTURE DECISIONS", subtitle: "Epistemic Status: Active · AST & Linter Enforced" },
-    { x: COL3_X, title: "⚡ HABITS & REPOSITORY NOTES", subtitle: "Long-term Learned Memory & Epistemic Notes" }
+    { x: COL1_X, kind: "kind-superseded", title: "SUPERSEDED · BANNED", subtitle: "Historical decisions, enforced as deterministic bans" },
+    { x: COL2_X, kind: "kind-active", title: "IN FORCE", subtitle: "Active architecture decisions · AST enforced" },
+    { x: COL3_X, kind: "kind-habit", title: "HABITS & NOTES", subtitle: "Learned from approvals · repository context" }
   ];
 
   let headerSvg = "";
   headers.forEach(h => {
     headerSvg += `
-      <g transform="translate(${h.x}, 40)">
-        <text x="0" y="18" fill="#f8fafc" font-size="13" font-weight="700" letter-spacing="0.5">${h.title}</text>
-        <text x="0" y="38" fill="#94a3b8" font-size="11">${h.subtitle}</text>
-        <line x1="0" y1="48" x2="${CARD_WIDTH}" y2="48" stroke="rgba(255,255,255,0.12)" stroke-width="1" />
+      <g class="graph-node-group-header ${h.kind}" transform="translate(${h.x}, 40)" style="--kind: var(${h.kind === "kind-superseded" ? "--accent-red" : h.kind === "kind-habit" ? "--accent-violet" : "--accent-green"})">
+        <circle cx="5" cy="13" r="5" style="fill: var(--kind)" />
+        <text x="18" y="18" class="graph-col-title">${h.title}</text>
+        <text x="0" y="38" class="graph-col-sub">${h.subtitle}</text>
+        <line x1="0" y1="50" x2="${CARD_WIDTH}" y2="50" class="graph-col-rule" />
       </g>
     `;
   });
@@ -2307,7 +2382,7 @@ function renderMemoryGraphSvg(nodes, edges) {
         <g class="graph-edge-group" data-edge-idx="${idx}" data-source="${escapeHtml(edge.source)}" data-target="${escapeHtml(edge.target)}">
           <path d="${pathData}" class="graph-edge-path" marker-end="url(#arrow-supersedes)" id="edge-${idx}" />
           <g transform="translate(${midX}, ${midY})">
-            <rect x="-38" y="-10" width="76" height="20" rx="10" fill="#1e1014" stroke="#ef4444" stroke-width="1" />
+            <rect x="-40" y="-10" width="80" height="20" rx="10" class="graph-edge-pill" />
             <text x="0" y="3.5" class="graph-edge-label">supersedes</text>
           </g>
         </g>
@@ -2325,84 +2400,67 @@ function renderMemoryGraphSvg(nodes, edges) {
     const isHabit = node.type === "habit";
     const isNote = node.type === "project_state";
 
-    let borderStroke = "#22c55e";
-    let stripeColor = "#22c55e";
-    let badgeText = "🟢 IN FORCE";
-    let badgeBg = "rgba(34, 197, 94, 0.15)";
-    let badgeTextColor = "#4ade80";
-
+    let kindClass = "kind-active";
+    let badgeText = "IN FORCE";
     if (isSuperseded) {
-      borderStroke = "#ef4444";
-      stripeColor = "#ef4444";
-      badgeText = "🚫 SUPERSEDED";
-      badgeBg = "rgba(239, 68, 68, 0.18)";
-      badgeTextColor = "#f87171";
+      kindClass = "kind-superseded";
+      badgeText = "SUPERSEDED";
     } else if (isHabit) {
-      borderStroke = "#a855f7";
-      stripeColor = "#a855f7";
-      badgeText = "⚡ HABIT";
-      badgeBg = "rgba(168, 85, 247, 0.18)";
-      badgeTextColor = "#c084fc";
+      kindClass = "kind-habit";
+      badgeText = "HABIT";
     } else if (isNote) {
-      borderStroke = "#38bdf8";
-      stripeColor = "#38bdf8";
-      badgeText = "📝 NOTE";
-      badgeBg = "rgba(56, 189, 248, 0.18)";
-      badgeTextColor = "#38bdf8";
+      kindClass = "kind-note";
+      badgeText = "NOTE";
     }
 
     const validDate = node.valid_from ? node.valid_from.split("T")[0] : "genesis";
     const rawLabel = (node.label || node.id);
-    const truncatedTitle = rawLabel.length > 38 ? rawLabel.slice(0, 35) + "..." : rawLabel;
+    const truncatedTitle = rawLabel.length > 46 ? rawLabel.slice(0, 43) + "..." : rawLabel;
 
     let bodyContentSvg = "";
     if (isSuperseded) {
       const whyText = node.why_inactive || "Superseded by newer architecture decision";
-      const truncatedWhy = whyText.length > 56 ? whyText.slice(0, 53) + "..." : whyText;
+      const truncatedWhy = whyText.length > 60 ? whyText.slice(0, 57) + "..." : whyText;
       const forbiddenTokens = (node.forbidden || []).slice(0, 3).join(", ");
 
       bodyContentSvg = `
-        <rect x="14" y="62" width="${CARD_WIDTH - 28}" height="44" rx="5" fill="rgba(239, 68, 68, 0.08)" stroke="rgba(239, 68, 68, 0.25)" stroke-width="1" />
-        <text x="22" y="78" fill="#fca5a5" font-size="10.5" font-weight="600">Why Inactive / Superseded:</text>
-        <text x="22" y="94" fill="#fecaca" font-size="10">${escapeHtml(truncatedWhy)}</text>
-        ${forbiddenTokens ? `<text x="14" y="125" fill="#ef4444" font-size="10" font-family="monospace">🚫 Banned: ${escapeHtml(forbiddenTokens)}</text>` : ''}
+        <rect x="14" y="60" width="${CARD_WIDTH - 28}" height="44" rx="7" class="node-why-bg" />
+        <text x="24" y="77" class="node-why-label">Why it was superseded</text>
+        <text x="24" y="93" class="node-why-text">${escapeHtml(truncatedWhy)}</text>
+        ${forbiddenTokens ? `<text x="14" y="125" class="node-mono node-forbidden">banned: ${escapeHtml(forbiddenTokens)}</text>` : ''}
       `;
     } else if (node.type === "architecture_decision") {
       const reqTokens = (node.required || []).slice(0, 2).join(", ");
       const forbTokens = (node.forbidden || []).slice(0, 2).join(", ");
 
       bodyContentSvg = `
-        ${reqTokens ? `<text x="14" y="76" fill="#4ade80" font-size="10.5" font-family="monospace">✅ Required: ${escapeHtml(reqTokens)}</text>` : ''}
-        ${forbTokens ? `<text x="14" y="98" fill="#f87171" font-size="10.5" font-family="monospace">🚫 Forbidden: ${escapeHtml(forbTokens)}</text>` : ''}
-        <text x="14" y="125" fill="#64748b" font-size="10">AST Rule Active · Valid from: ${validDate}</text>
+        ${reqTokens ? `<text x="14" y="78" class="node-mono node-required">+ required: ${escapeHtml(reqTokens)}</text>` : ''}
+        ${forbTokens ? `<text x="14" y="98" class="node-mono node-forbidden">− forbidden: ${escapeHtml(forbTokens)}</text>` : ''}
+        <text x="14" y="126" class="node-foot">AST rule active · valid from ${validDate}</text>
       `;
     } else {
       const tagList = (node.tags || []).slice(0, 3).join(", ");
       bodyContentSvg = `
-        <text x="14" y="80" fill="#94a3b8" font-size="11">Ephemeral Memory Node</text>
-        ${tagList ? `<text x="14" y="105" fill="#38bdf8" font-size="10.5" font-family="monospace">Tags: ${escapeHtml(tagList)}</text>` : ''}
-        <text x="14" y="125" fill="#64748b" font-size="10">Recorded: ${validDate}</text>
+        <text x="14" y="80" class="node-foot">${isHabit ? "Learned from an approved edit" : "Repository context note"}</text>
+        ${tagList ? `<text x="14" y="102" class="node-mono node-tags">tags: ${escapeHtml(tagList)}</text>` : ''}
+        <text x="14" y="126" class="node-foot">Recorded ${validDate}</text>
       `;
     }
 
     nodesSvg += `
-      <g class="graph-node-group" data-id="${escapeHtml(node.id)}" transform="translate(${pos.x}, ${pos.y})">
-        <rect class="node-card" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="8" fill="#0b1120" stroke="${borderStroke}" stroke-width="1.5" stroke-dasharray="${isSuperseded ? '5 3' : 'none'}" />
-        <rect x="0" y="0" width="${CARD_WIDTH}" height="3" rx="1.5" fill="${stripeColor}" />
-        
-        <!-- Header -->
-        <rect x="14" y="12" width="105" height="18" rx="4" fill="${badgeBg}" />
-        <text x="20" y="25" fill="${badgeTextColor}" font-size="9.5" font-weight="700" letter-spacing="0.3">${badgeText}</text>
-        <text x="${CARD_WIDTH - 14}" y="25" text-anchor="end" fill="#94a3b8" font-size="10" font-family="monospace">${validDate}</text>
+      <g class="graph-node-group ${kindClass}" data-id="${escapeHtml(node.id)}" transform="translate(${pos.x}, ${pos.y})">
+        <rect class="node-card" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="12" />
+        <rect x="0" y="16" width="3" height="${CARD_HEIGHT - 32}" rx="1.5" class="node-stripe" />
 
-        <!-- Title -->
-        <text x="14" y="47" fill="#f8fafc" font-size="12.5" font-weight="600">${escapeHtml(truncatedTitle)}</text>
+        <rect x="14" y="13" width="${badgeText.length * 7 + 16}" height="18" rx="9" class="node-badge-bg" />
+        <text x="22" y="25.5" class="node-badge-text">${badgeText}</text>
+        <text x="${CARD_WIDTH - 14}" y="25.5" text-anchor="end" class="node-date">${validDate}</text>
 
-        <!-- Details -->
+        <text x="14" y="49" class="node-title">${escapeHtml(truncatedTitle)}</text>
+
         ${bodyContentSvg}
 
-        <!-- Click hint -->
-        <text x="${CARD_WIDTH - 14}" y="${CARD_HEIGHT - 12}" text-anchor="end" fill="#38bdf8" font-size="9.5" opacity="0.8">Click to view ADR →</text>
+        ${node.id.startsWith("adr:") ? `<text x="${CARD_WIDTH - 14}" y="${CARD_HEIGHT - 12}" text-anchor="end" class="node-hint">Open ADR →</text>` : ''}
       </g>
     `;
   });
@@ -2422,9 +2480,8 @@ function renderMemoryGraphSvg(nodes, edges) {
         const path = edgeEl.querySelector(".graph-edge-path");
         if (src === nodeId || tgt === nodeId) {
           if (path) {
-            path.style.stroke = "#f87171";
-            path.style.strokeWidth = "3.5px";
-            path.style.strokeDasharray = "none";
+            path.style.strokeWidth = "3px";
+            path.style.opacity = "1";
           }
         }
       });
@@ -2435,7 +2492,7 @@ function renderMemoryGraphSvg(nodes, edges) {
           <span class="graph-tooltip-status ${nodeData.epistemic_status === 'superseded' ? 'superseded' : (nodeData.type === 'habit' ? 'habit' : (nodeData.type === 'project_state' ? 'note' : 'active'))}">
             ${escapeHtml(nodeData.epistemic_status).toUpperCase()}
           </span>
-          <div style="font-size: 10.5px; color: #94a3b8; margin-bottom: 6px;">
+          <div class="graph-tooltip-meta">
             Valid from: ${nodeData.valid_from ? nodeData.valid_from.split('T')[0] : 'genesis'}
             ${nodeData.superseded_at ? `<br/>Superseded at: ${nodeData.superseded_at.split('T')[0]}` : ''}
           </div>
@@ -2444,20 +2501,20 @@ function renderMemoryGraphSvg(nodes, edges) {
         if (nodeData.why_inactive) {
           tooltipContent += `
             <div class="graph-tooltip-why">
-              <strong>Why Superseded / Inactive:</strong><br/>
+              <strong>Why it was superseded</strong><br/>
               ${escapeHtml(nodeData.why_inactive)}
             </div>
           `;
         }
 
         if (nodeData.required && nodeData.required.length > 0) {
-          tooltipContent += `<div style="color: #4ade80; margin-top: 5px; font-family: monospace; font-size: 10px;">Required: ${escapeHtml(nodeData.required.join(', '))}</div>`;
+          tooltipContent += `<div class="graph-tooltip-line req">Required: ${escapeHtml(nodeData.required.join(', '))}</div>`;
         }
         if (nodeData.forbidden && nodeData.forbidden.length > 0) {
-          tooltipContent += `<div style="color: #ef4444; margin-top: 3px; font-family: monospace; font-size: 10px;">Forbidden: ${escapeHtml(nodeData.forbidden.join(', '))}</div>`;
+          tooltipContent += `<div class="graph-tooltip-line forb">Forbidden: ${escapeHtml(nodeData.forbidden.join(', '))}</div>`;
         }
         if (nodeData.tags && nodeData.tags.length > 0) {
-          tooltipContent += `<div style="color: #38bdf8; margin-top: 5px; font-size: 10px;">Tags: ${escapeHtml(nodeData.tags.join(', '))}</div>`;
+          tooltipContent += `<div class="graph-tooltip-line tags">Tags: ${escapeHtml(nodeData.tags.join(', '))}</div>`;
         }
 
         tooltip.innerHTML = tooltipContent;
@@ -2488,9 +2545,8 @@ function renderMemoryGraphSvg(nodes, edges) {
 
     el.addEventListener("mouseleave", () => {
       viewport.querySelectorAll(".graph-edge-path").forEach(path => {
-        path.style.stroke = "";
         path.style.strokeWidth = "";
-        path.style.strokeDasharray = "";
+        path.style.opacity = "";
       });
       if (tooltip) tooltip.style.display = "none";
     });
