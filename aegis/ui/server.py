@@ -152,7 +152,8 @@ def reset_demo() -> Dict[str, Any]:
             except Exception:
                 pass
 
-    global graph, router
+    global graph, router, workspace_root
+    workspace_root = PROJECT_ROOT / "demo_vault"
     graph = MemoryGraph(storage_dir=storage_dir)
     nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
     note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes")
