@@ -4,18 +4,19 @@ Binds to 127.0.0.1:8080 strictly, enforces local execution, and provides demo AP
 
 from __future__ import annotations
 import json
+import os
 import re
 import threading
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -33,6 +34,18 @@ from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGene
 from aegis.system2.websearch import SearchOutcome, WebSearcher, format_for_prompt
 from aegis.system2.computer import MAX_TOOL_ROUNDS, computer_system_prompt, parse_tool_call, run_tool
 from aegis.system2.images import normalize_images, screenshot_note
+from clearsky.auth import (
+    Auth,
+    AuthStore,
+    Mailer,
+    OtpService,
+    SessionManager,
+    SmtpSettings,
+    build_auth_router,
+    load_or_create_secret,
+)
+from clearsky.auth.routes import public_user
+from clearsky.workspace_memory import WorkspaceMemory
 from aegis.system2.prompt import (
     compile_baseline,
     build_free_messages,
@@ -55,34 +68,166 @@ if config.system2_provider == "ollama":
     if parsed_url.hostname not in ("127.0.0.1", "localhost"):
         raise RuntimeError(f"Web startup error: ollama_base_url host must be 127.0.0.1 or localhost, got '{parsed_url.hostname}'")
 
-workspace_root = Path(config.workspace_root)
-if not workspace_root.is_absolute():
-    workspace_root = (PROJECT_ROOT / workspace_root).resolve()
+DEFAULT_WORKSPACE = Path(config.workspace_root)
+if not DEFAULT_WORKSPACE.is_absolute():
+    DEFAULT_WORKSPACE = (PROJECT_ROOT / DEFAULT_WORKSPACE).resolve()
 
 # "No workspace" mode: requests go straight to the local model with no ADRs,
 # bans, abstention or habits, and nothing is written to disk.
 FREE_MODE_KEYS = {"__free__", "none", "free", "no_workspace"}
 FREE_MODE_NAME = "No workspace"
-free_mode = False
 # Create missing seed files only; resets (/api/reset, demo.sh) do the full rewrite
 seed_vault.write_missing(PROJECT_ROOT)
 
 storage_dir = Path(config.storage_dir)
 storage_dir.mkdir(parents=True, exist_ok=True)
-graph = MemoryGraph(storage_dir=storage_dir)
 
-# Ensure corpus is populated
-if not graph.all_nodes():
-    nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
-    note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes")
-    graph.replace_corpus(nodes, edges)
-    for n in note_nodes:
-        graph.upsert_node(n)
-
-router = Router(graph=graph, config=config)
+# One memory graph + router per workspace (users can be in different ones at
+# once); habits from the old single memory.sqlite are carried over on first open
+memory = WorkspaceMemory(storage_dir / "workspaces", config, legacy_storage=storage_dir)
+memory.get(DEFAULT_WORKSPACE)
 generator = MockGenerator(config=config) if config.system2_provider == "mock" else OllamaGenerator(config=config)
 
-app = FastAPI(title="AegisTree Sovereign Second Brain")
+# ---- Multi-user: email one-time-code sign-in ----
+auth_store = AuthStore(storage_dir / "auth.sqlite")
+auth = Auth(
+    store=auth_store,
+    otp=OtpService(auth_store, load_or_create_secret(storage_dir / "secret.key")),
+    mailer=Mailer(SmtpSettings.from_env(), storage_dir / "outbox.log"),
+    sessions=SessionManager(auth_store),
+    secure_cookies=config.https or os.environ.get("CLEARSKY_HTTPS") == "1",
+)
+
+PRESET_WORKSPACES = {
+    "demo_vault": PROJECT_ROOT / "demo_vault",
+    "cryptography": PROJECT_ROOT / "repos" / "cryptography",
+    "pyca": PROJECT_ROOT / "repos" / "cryptography",
+    "demo_pyca": PROJECT_ROOT / "repos" / "cryptography",
+    "pydantic": PROJECT_ROOT / "repos" / "pydantic",
+    "demo_pydantic": PROJECT_ROOT / "repos" / "pydantic",
+    "sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
+    "demo_sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
+}
+
+
+def _allowed_roots() -> List[Path]:
+    extra = [(PROJECT_ROOT / r).resolve() if not Path(r).is_absolute() else Path(r).resolve()
+             for r in config_manager.config.allowed_workspace_roots]
+    return sorted({p.resolve() for p in PRESET_WORKSPACES.values()} | {DEFAULT_WORKSPACE.resolve()} | set(extra))
+
+
+def _resolve_workspace(raw: str) -> Path:
+    """A workspace a user may open: a preset, or inside an allowed root. Anything else is refused."""
+    raw = raw.strip()
+    if raw in PRESET_WORKSPACES:
+        return PRESET_WORKSPACES[raw].resolve()
+    target = Path(raw).expanduser()
+    target = (target if target.is_absolute() else PROJECT_ROOT / target).resolve()
+    if not any(target == allowed or target.is_relative_to(allowed) for allowed in _allowed_roots()):
+        raise HTTPException(
+            status_code=403,
+            detail="That folder isn't an allowed workspace. Add it to allowed_workspace_roots in .aegis/config.json.",
+        )
+    return target
+
+
+@dataclass
+class UserState:
+    root: Path
+    free: bool = False
+
+
+user_states: Dict[int, UserState] = {}
+_state_lock = threading.Lock()
+
+
+def _user_state(user: Dict[str, Any]) -> UserState:
+    """Each signed-in user's workspace choice, restored from their last session."""
+    with _state_lock:
+        state = user_states.get(user["id"])
+        if state is None:
+            state = UserState(DEFAULT_WORKSPACE)
+            last = user.get("last_workspace")
+            if last == "__free__":
+                state.free = True
+            elif last:
+                try:
+                    candidate = _resolve_workspace(last)
+                    if candidate.is_dir():
+                        state.root = candidate
+                except HTTPException:
+                    pass
+            user_states[user["id"]] = state
+        return state
+
+
+def _current_user(request: Request) -> Dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not signed in")
+    return user
+
+
+def _bind(request: Request):
+    """(workspace_root, graph, router, free_mode) for the signed-in user of this request."""
+    state = _user_state(_current_user(request))
+    handle = memory.get(state.root)
+    return handle.root, handle.graph, handle.router, state.free
+
+
+def _audit(request: Request, action: str, detail: Any = None) -> None:
+    user = getattr(request.state, "user", None)
+    auth_store.audit(user["id"] if user else None, action, detail)
+
+
+_in_flight: set = set()
+_in_flight_lock = threading.Lock()
+
+
+def _claim_run(user_id: int) -> None:
+    """One generation per user at a time, so nobody monopolises the local model."""
+    with _in_flight_lock:
+        if user_id in _in_flight:
+            raise HTTPException(status_code=429, detail="You already have a request running. Wait for it to finish.")
+        _in_flight.add(user_id)
+
+
+def _release_run(user_id: int) -> None:
+    with _in_flight_lock:
+        _in_flight.discard(user_id)
+
+
+def _released_after(stream, user_id: int):
+    try:
+        yield from stream
+    finally:
+        _release_run(user_id)
+
+app = FastAPI(title="ClearSky")
+app.include_router(build_auth_router(auth))
+
+PUBLIC_API_PREFIXES = ("/api/auth/",)
+APP_PAGES = {"/", "/index.html"}
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.middleware("http")
+async def clearsky_sign_in(request: Request, call_next):
+    """Every API call needs a session (except sign-in itself); the app page
+    sends signed-out visitors to /login.html; cross-site writes are refused."""
+    path = request.url.path
+    if request.method in UNSAFE_METHODS and path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != request.headers.get("host"):
+            return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
+    user = auth.user_for(request)
+    request.state.user = user
+    if path.startswith("/api/") and not path.startswith(PUBLIC_API_PREFIXES) and user is None:
+        return JSONResponse({"detail": "Not signed in"}, status_code=401)
+    if path in APP_PAGES and user is None:
+        return RedirectResponse("/login.html", status_code=303)
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def add_no_cache_headers(request, call_next):
@@ -123,8 +268,8 @@ class ApproveRequest(BaseModel):
 def get_health() -> Dict[str, Any]:
     verdict_loaded = False
     verdict_error: Optional[str] = None
-    if router.engine is not None:
-        engine_inst = getattr(router.engine, "_engine", None)
+    if memory.engine is not None:
+        engine_inst = getattr(memory.engine, "_engine", None)
         if engine_inst is not None:
             verdict_loaded = True
         else:
@@ -159,9 +304,10 @@ def get_models() -> Dict[str, Any]:
 
 
 @app.post("/api/models")
-def set_model(req: SetModelRequest) -> Dict[str, Any]:
+def set_model(req: SetModelRequest, request: Request) -> Dict[str, Any]:
     global generator
     res = config_manager.set_system2_model(req.model_id)
+    _audit(request, "model_switch", {"model": req.model_id})
     if config_manager.config.system2_provider == "mock":
         generator = MockGenerator(config=config_manager.config)
     else:
@@ -170,32 +316,18 @@ def set_model(req: SetModelRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/reset")
-def reset_demo() -> Dict[str, Any]:
-    # Restore all demo repositories from seed constants
+def reset_demo(request: Request) -> Dict[str, Any]:
+    """Restore the demo repositories and clear their memory. Affects every user."""
     seed_vault.write_all(PROJECT_ROOT)
+    for root in {p.resolve() for p in PRESET_WORKSPACES.values()}:
+        memory.forget(root, delete_storage=True)
+    memory.get(DEFAULT_WORKSPACE)
 
-    # Re-initialize DB
-    db_file = storage_dir / "memory.sqlite"
-    for extra in ["", "-wal", "-shm"]:
-        p = Path(f"{db_file}{extra}")
-        if p.exists():
-            try:
-                p.unlink()
-            except Exception:
-                pass
-
-    global graph, router, workspace_root, free_mode
-    workspace_root = PROJECT_ROOT / "demo_vault"
-    free_mode = False
-    graph = MemoryGraph(storage_dir=storage_dir)
-    nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
-    note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes")
-    graph.replace_corpus(nodes, edges)
-    for n in note_nodes:
-        graph.upsert_node(n)
-
-    router = Router(graph=graph, config=config, engine=router.engine)
+    state = _user_state(_current_user(request))
+    state.root, state.free = DEFAULT_WORKSPACE, False
+    auth_store.set_last_workspace(_current_user(request)["id"], str(DEFAULT_WORKSPACE))
     runs_cache.clear()
+    _audit(request, "demo_reset")
     return {"status": "ok", "message": "Demo reset complete"}
 
 
@@ -387,6 +519,17 @@ def _free_stream(
 
 @app.post("/api/run")
 def run_prompt(req: RunRequest, request: Request) -> Dict[str, Any]:
+    owner = _current_user(request)["id"]
+    workspace_root, graph, router, free_mode = _bind(request)
+    _claim_run(owner)
+    try:
+        return _run_prompt(req, request, owner, workspace_root, graph, router, free_mode)
+    finally:
+        _release_run(owner)
+
+
+def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: Path,
+                graph: MemoryGraph, router: Router, free_mode: bool) -> Dict[str, Any]:
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
     tool_log = []
@@ -412,6 +555,7 @@ def run_prompt(req: RunRequest, request: Request) -> Dict[str, Any]:
     if route.status == "blocked":
         tool_log.append({"tool": "propose_patch", "status": "blocked"})
         runs_cache[run_id] = {
+            "owner": owner,
             "route": route,
             "prompt": prompt,
             "leaf_text": "",
@@ -466,6 +610,7 @@ def run_prompt(req: RunRequest, request: Request) -> Dict[str, Any]:
     if route.status == "abstained":
         tool_log.append({"tool": "propose_patch", "status": "skipped"})
         runs_cache[run_id] = {
+            "owner": owner,
             "route": route,
             "prompt": prompt,
             "leaf_text": "",
@@ -643,6 +788,7 @@ def run_prompt(req: RunRequest, request: Request) -> Dict[str, Any]:
 
     # Cache run for Approve
     runs_cache[run_id] = {
+            "owner": owner,
         "route": route,
         "prompt": prompt,
         "leaf_text": leaf_text,
@@ -715,10 +861,16 @@ def run_prompt_stream(req: RunRequest, request: Request):
     prompt = req.prompt.strip()
     run_id = str(uuid.uuid4())
     images = _checked_images(req)
+    owner = _current_user(request)["id"]
+    workspace_root, graph, router, free_mode = _bind(request)
+    _claim_run(owner)
 
     if free_mode:
         return StreamingResponse(
-            _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images),
+            _released_after(
+                _free_stream(run_id, prompt, req.history, req.web_search, req.computer, _is_local(request), images),
+                owner,
+            ),
             media_type="text/event-stream",
         )
 
@@ -779,6 +931,7 @@ def run_prompt_stream(req: RunRequest, request: Request):
                 "draft_adr": None,
             }
             runs_cache[run_id] = {
+            "owner": owner,
                 "route": route,
                 "prompt": prompt,
                 "leaf_text": "",
@@ -829,6 +982,7 @@ def run_prompt_stream(req: RunRequest, request: Request):
                 "draft_adr": None,
             }
             runs_cache[run_id] = {
+            "owner": owner,
                 "route": route,
                 "prompt": prompt,
                 "leaf_text": "",
@@ -1032,6 +1186,7 @@ def run_prompt_stream(req: RunRequest, request: Request):
         }
 
         runs_cache[run_id] = {
+            "owner": owner,
             "route": route,
             "prompt": prompt,
             "leaf_text": leaf_text,
@@ -1061,18 +1216,22 @@ def run_prompt_stream(req: RunRequest, request: Request):
         }
         yield f"data: {json.dumps(full_payload, default=str)}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(_released_after(event_stream(), owner), media_type="text/event-stream")
 
 
 
 @app.post("/api/approve")
-def approve_patch(req: ApproveRequest) -> Dict[str, Any]:
+def approve_patch(req: ApproveRequest, request: Request) -> Dict[str, Any]:
+    user = _current_user(request)
+    workspace_root, graph, router, free_mode = _bind(request)
     if free_mode:
         raise HTTPException(status_code=409, detail="No workspace attached: nothing to commit.")
     if req.run_id not in runs_cache:
         raise HTTPException(status_code=409, detail="Run expired. Press Run again.")
 
     run = runs_cache[req.run_id]
+    if run.get("owner") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the person who started this run can approve it.")
     result = apply_patch(
         graph=graph,
         route=run["route"],
@@ -1084,7 +1243,10 @@ def approve_patch(req: ApproveRequest) -> Dict[str, Any]:
         leaf_text=run["leaf_text"],
         baseline_text=run["baseline_text"],
         decision_source=run["route"].task_source,
+        actor=user["email"],
     )
+    _audit(request, "patch_refused" if result.get("refused") else "patch_applied",
+           {"workspace": str(workspace_root), "run_id": req.run_id, "habit": result.get("habit_label")})
 
     if result.get("refused"):
         banned = result.get("banned_literal", "forbidden literal")
@@ -1104,7 +1266,8 @@ def approve_patch(req: ApproveRequest) -> Dict[str, Any]:
 
 
 @app.get("/api/memory")
-def get_memory() -> Dict[str, Any]:
+def get_memory(request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
     all_nodes = graph.all_nodes()
     active_nodes = graph.active_nodes()
     active_ids = {n.id for n in active_nodes}
@@ -1144,7 +1307,8 @@ def get_memory() -> Dict[str, Any]:
 
 
 @app.get("/api/memory/graph")
-def get_memory_graph() -> Dict[str, Any]:
+def get_memory_graph(request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
     all_nodes = graph.all_nodes()
     all_edges = graph.all_edges()
     return {
@@ -1202,39 +1366,18 @@ class UpdateAdrRequest(BaseModel):
     content: str
 
 
-_reload_lock = threading.Lock()
-
-
-def _reload_workspace_memory():
-    global graph, router, workspace_root
-    with _reload_lock:
-        # Preserve learned habits
-        habits = [n for n in graph.all_nodes() if n.type == NodeType.HABIT]
-        nodes, edges = WorkspaceIngestor.ingest_adrs(workspace_root)
-        note_nodes = WorkspaceIngestor.ingest_markdown_vault(workspace_root / "notes") if (workspace_root / "notes").exists() else []
-        graph.replace_corpus(nodes, edges)
-        for h in habits:
-            graph.upsert_node(h)
-        for n in note_nodes:
-            graph.upsert_node(n)
-        # Reuse the loaded Verdict engine instead of reading the weights again
-        router = Router(graph=graph, config=config, engine=router.engine)
-        # Parse the repo's files now so the first request is not the slow one
-        scoped_exclusions(workspace_root)
-
-
-# Live ingestion: ADRs or notes saved from any editor reload memory within ~1s
+# Live ingestion: ADRs or notes saved from any editor reload that workspace's
+# memory within ~1s, for every workspace someone has open
 adr_watcher = WorkspaceWatcher(
-    get_root=lambda: None if free_mode else workspace_root,
-    on_change=lambda changes: _reload_workspace_memory(),
+    get_root=lambda: memory.roots(),
+    on_change=lambda changes: memory.reload(Path(changes["root"])),
 )
 
 
 @app.on_event("startup")
 def _start_adr_watcher() -> None:
-    # Re-ingest on every start: ADRs edited while the server was down would
-    # otherwise stay stale in the persisted graph (habits are kept)
-    _reload_workspace_memory()
+    # memory.get() ingested the default workspace at import, so ADRs edited
+    # while the server was down are already current
     adr_watcher.start()
 
 
@@ -1244,10 +1387,13 @@ def _stop_adr_watcher() -> None:
 
 
 @app.get("/api/memory/changes")
-def memory_changes(since: int = 0) -> Dict[str, Any]:
+def memory_changes(request: Request, since: int = 0) -> Dict[str, Any]:
+    """Change events for the workspace this user has open (others' are not shown)."""
+    workspace_root, graph, router, free_mode = _bind(request)
+    mine = str(workspace_root)
     return {
         "seq": adr_watcher.last_seq,
-        "events": [asdict(e) for e in adr_watcher.events_since(since)],
+        "events": [asdict(e) for e in adr_watcher.events_since(since) if not free_mode and e.root == mine],
     }
 
 
@@ -1256,8 +1402,8 @@ class SwitchWorkspaceRequest(BaseModel):
 
 
 @app.get("/api/workspace")
-def get_workspace() -> Dict[str, Any]:
-    global workspace_root
+def get_workspace(request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
     if free_mode:
         return {"workspace_root": None, "name": FREE_MODE_NAME, "exists": True, "adr_count": 0, "note_count": 0, "free": True}
     adr_count = len(list((workspace_root / "docs" / "adr").glob("*.md"))) if (workspace_root / "docs" / "adr").exists() else 0
@@ -1272,8 +1418,8 @@ def get_workspace() -> Dict[str, Any]:
 
 
 @app.get("/api/workspaces")
-def list_workspaces() -> Dict[str, Any]:
-    global workspace_root
+def list_workspaces(request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
     presets = [
         {
             "id": "__free__",
@@ -1340,11 +1486,14 @@ def list_workspaces() -> Dict[str, Any]:
 
 
 @app.post("/api/workspace")
-def switch_workspace(req: SwitchWorkspaceRequest) -> Dict[str, Any]:
-    global workspace_root, free_mode
+def switch_workspace(req: SwitchWorkspaceRequest, request: Request) -> Dict[str, Any]:
+    """Switch this user's workspace (other users are unaffected)."""
+    user = _current_user(request)
+    state = _user_state(user)
     raw = req.path.strip()
     if raw.lower() in FREE_MODE_KEYS:
-        free_mode = True
+        state.free = True
+        auth_store.set_last_workspace(user["id"], "__free__")
         return {
             "status": "switched",
             "workspace_root": "(none)",
@@ -1353,46 +1502,50 @@ def switch_workspace(req: SwitchWorkspaceRequest) -> Dict[str, Any]:
             "note_count": 0,
             "free": True,
         }
-    preset_shortcuts = {
-        "demo_vault": PROJECT_ROOT / "demo_vault",
-        "cryptography": PROJECT_ROOT / "repos" / "cryptography",
-        "pyca": PROJECT_ROOT / "repos" / "cryptography",
-        "demo_pyca": PROJECT_ROOT / "repos" / "cryptography",
-        "pydantic": PROJECT_ROOT / "repos" / "pydantic",
-        "demo_pydantic": PROJECT_ROOT / "repos" / "pydantic",
-        "sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
-        "demo_sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
-    }
-    if raw in preset_shortcuts:
-        target_path = preset_shortcuts[raw].resolve()
-    else:
-        target_path = Path(raw).expanduser()
-        if not target_path.is_absolute():
-            target_path = (PROJECT_ROOT / target_path).resolve()
 
+    target_path = _resolve_workspace(raw)
     if not target_path.exists():
         raise HTTPException(status_code=400, detail=f"Directory '{target_path}' does not exist on disk.")
     if not target_path.is_dir():
         raise HTTPException(status_code=400, detail=f"Path '{target_path}' is not a directory.")
 
-    workspace_root = target_path
-    free_mode = False
-    _reload_workspace_memory()
+    memory.reload(target_path)
+    state.root, state.free = target_path, False
+    auth_store.set_last_workspace(user["id"], str(target_path))
 
-    adr_count = len(list((workspace_root / "docs" / "adr").glob("*.md"))) if (workspace_root / "docs" / "adr").exists() else 0
-    note_count = len(list((workspace_root / "notes").glob("*.md"))) if (workspace_root / "notes").exists() else 0
+    adr_count = len(list((target_path / "docs" / "adr").glob("*.md"))) if (target_path / "docs" / "adr").exists() else 0
+    note_count = len(list((target_path / "notes").glob("*.md"))) if (target_path / "notes").exists() else 0
 
     return {
         "status": "switched",
-        "workspace_root": str(workspace_root),
-        "name": workspace_root.name,
+        "workspace_root": str(target_path),
+        "name": target_path.name,
         "adr_count": adr_count,
         "note_count": note_count,
     }
 
 
+ADR_FILENAME = re.compile(r"^[A-Za-z0-9][\w.-]*\.md$")
+
+
+def _adr_file(workspace_root: Path, adr_id: str, must_exist: bool = True) -> Path:
+    """The ADR file for an id like 'adr:014-aegis-seal', confined to <workspace>/docs/adr."""
+    stem = adr_id.removeprefix("adr:")
+    filename = stem if stem.endswith(".md") else f"{stem}.md"
+    adr_dir = (workspace_root / "docs" / "adr").resolve()
+    if not ADR_FILENAME.match(filename) or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid ADR name.")
+    filepath = (adr_dir / filename).resolve()
+    if not filepath.is_relative_to(adr_dir):
+        raise HTTPException(status_code=400, detail="Invalid ADR name.")
+    if must_exist and not filepath.is_file():
+        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+    return filepath
+
+
 @app.get("/api/adrs")
-def list_adrs() -> Dict[str, Any]:
+def list_adrs(request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
     adr_dir = workspace_root / "docs" / "adr"
     if not adr_dir.exists():
         return {"adrs": []}
@@ -1435,18 +1588,9 @@ def list_adrs() -> Dict[str, Any]:
 
 
 @app.get("/api/adr/{adr_id:path}")
-def get_adr(adr_id: str) -> Dict[str, Any]:
-    stem = adr_id.removeprefix("adr:")
-    filename = f"{stem}.md" if not stem.endswith(".md") else stem
-    filepath = workspace_root / "docs" / "adr" / filename
-    if not filepath.exists():
-        adr_dir = workspace_root / "docs" / "adr"
-        for f in adr_dir.glob("*.md"):
-            if f.stem == stem or f"adr:{f.stem}" == adr_id:
-                filepath = f
-                break
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+def get_adr(adr_id: str, request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
+    filepath = _adr_file(workspace_root, adr_id)
 
     parsed = ADRParser.parse_file(filepath)
     node = parsed[0] if parsed else None
@@ -1468,71 +1612,55 @@ def get_adr(adr_id: str) -> Dict[str, Any]:
 
 
 @app.post("/api/adr")
-def create_adr(req: CreateAdrRequest) -> Dict[str, Any]:
-    fname = req.filename.strip()
-    if not fname:
-        fname = f"adr-{uuid.uuid4().hex[:6]}.md"
-    if not fname.endswith(".md"):
-        fname += ".md"
-    safe_fname = Path(fname).name
-    adr_dir = workspace_root / "docs" / "adr"
-    adr_dir.mkdir(parents=True, exist_ok=True)
-    filepath = adr_dir / safe_fname
+def create_adr(req: CreateAdrRequest, request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
+    fname = req.filename.strip() or f"adr-{uuid.uuid4().hex[:6]}.md"
+    (workspace_root / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+    filepath = _adr_file(workspace_root, fname, must_exist=False)
     if filepath.exists():
-        raise HTTPException(status_code=409, detail=f"ADR file '{safe_fname}' already exists")
+        raise HTTPException(status_code=409, detail=f"ADR file '{filepath.name}' already exists")
 
     filepath.write_text(req.content.strip() + "\n", encoding="utf-8")
-    _reload_workspace_memory()
-    return {"status": "ok", "filename": safe_fname, "id": f"adr:{filepath.stem}"}
+    memory.reload(workspace_root)
+    _audit(request, "adr_created", {"workspace": str(workspace_root), "file": filepath.name})
+    return {"status": "ok", "filename": filepath.name, "id": f"adr:{filepath.stem}"}
 
 
 @app.put("/api/adr/{adr_id:path}")
-def update_adr(adr_id: str, req: UpdateAdrRequest) -> Dict[str, Any]:
-    stem = adr_id.removeprefix("adr:")
-    filename = f"{stem}.md" if not stem.endswith(".md") else stem
-    filepath = workspace_root / "docs" / "adr" / filename
-    if not filepath.exists():
-        adr_dir = workspace_root / "docs" / "adr"
-        for f in adr_dir.glob("*.md"):
-            if f.stem == stem or f"adr:{f.stem}" == adr_id:
-                filepath = f
-                break
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+def update_adr(adr_id: str, req: UpdateAdrRequest, request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
+    filepath = _adr_file(workspace_root, adr_id)
 
     filepath.write_text(req.content.strip() + "\n", encoding="utf-8")
-    _reload_workspace_memory()
+    memory.reload(workspace_root)
+    _audit(request, "adr_updated", {"workspace": str(workspace_root), "file": filepath.name})
     return {"status": "ok", "filename": filepath.name, "id": f"adr:{filepath.stem}"}
 
 
 @app.delete("/api/adr/{adr_id:path}")
-def delete_adr(adr_id: str) -> Dict[str, Any]:
-    stem = adr_id.removeprefix("adr:")
-    filename = f"{stem}.md" if not stem.endswith(".md") else stem
-    filepath = workspace_root / "docs" / "adr" / filename
-    if not filepath.exists():
-        adr_dir = workspace_root / "docs" / "adr"
-        for f in adr_dir.glob("*.md"):
-            if f.stem == stem or f"adr:{f.stem}" == adr_id:
-                filepath = f
-                break
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail=f"ADR '{adr_id}' not found")
+def delete_adr(adr_id: str, request: Request) -> Dict[str, Any]:
+    workspace_root, graph, router, free_mode = _bind(request)
+    filepath = _adr_file(workspace_root, adr_id)
 
     try:
         filepath.unlink()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
 
-    _reload_workspace_memory()
+    memory.reload(workspace_root)
+    _audit(request, "adr_deleted", {"workspace": str(workspace_root), "file": filepath.name})
+    return {"status": "ok", "filename": filepath.name, "id": f"adr:{filepath.stem}"}
+
+
 class GenerateAdrRequest(BaseModel):
     prompt: str
     model_id: Optional[str] = None
 
 
 @app.post("/api/adr/generate")
-def generate_adr_stream(req: GenerateAdrRequest):
+def generate_adr_stream(req: GenerateAdrRequest, request: Request):
     global generator
+    workspace_root, graph, router, free_mode = _bind(request)
     if req.model_id and req.model_id != config_manager.config.system2_model_id:
         config_manager.set_system2_model(req.model_id)
         if config_manager.config.system2_provider == "mock":

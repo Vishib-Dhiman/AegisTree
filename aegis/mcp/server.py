@@ -83,22 +83,15 @@ def build_server(
 def _workspace_graph(root: Path, storage_dir: Path):
     """A memory graph for `root` alone: its ADRs and notes, plus the habits the
     web app learned there (untagged habits apply everywhere, as in the app)."""
-    from aegis.core.ingestion import WorkspaceIngestor
-    from aegis.core.models import NodeType
+    from clearsky.workspace_memory import WorkspaceMemory, copy_habits, workspace_slug
+    from aegis.core.config import config_manager
     from aegis.system1.graph import MemoryGraph
 
     root = root.resolve()
-    graph = MemoryGraph(storage_dir=storage_dir / "mcp" / root.name)
-    nodes, edges = WorkspaceIngestor.ingest_adrs(root)
-    graph.replace_corpus(nodes, edges)
-    if (root / "notes").is_dir():
-        for note in WorkspaceIngestor.ingest_markdown_vault(root / "notes"):
-            graph.upsert_node(note)
-    shared = storage_dir / "memory.sqlite"
-    if shared.exists():
-        for habit in MemoryGraph(storage_dir=storage_dir).all_nodes():
-            if habit.type == NodeType.HABIT and habit.metadata.get("workspace") in (None, str(root)):
-                graph.upsert_node(habit)
+    graph = WorkspaceMemory(storage_dir / "mcp", config_manager.config).get(root).graph
+    for source in (storage_dir / "workspaces" / workspace_slug(root), storage_dir):
+        if (source / "memory.sqlite").exists():
+            copy_habits(MemoryGraph(storage_dir=source), graph, root)
     return graph
 
 

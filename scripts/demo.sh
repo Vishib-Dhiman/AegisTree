@@ -37,9 +37,22 @@ $PYTHON scripts/reset_demo.py
 MODE="${1:-web}"
 
 if [ "$MODE" = "tui" ] || [ "$MODE" = "cli" ]; then
-  echo "Launching AegisTree Terminal User Interface..."
+  echo "Launching ClearSky Terminal User Interface..."
   exec $PYTHON -m aegis.ui.cli
+elif [ "$MODE" = "--lan" ] || [ "$MODE" = "lan" ]; then
+  # Other devices on this network sign in over HTTPS (self-signed certificate)
+  CERT="$(./scripts/make_cert.sh)"
+  LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  export CLEARSKY_HTTPS=1
+  echo "Launching ClearSky for your network:"
+  echo "  this machine:  https://127.0.0.1:8080"
+  [ -n "$LAN_IP" ] && echo "  other devices: https://$LAN_IP:8080  (accept the certificate warning once)"
+  if [ -z "${CLEARSKY_SMTP_HOST:-}" ]; then
+    echo "  sign-in codes: not emailed (CLEARSKY_SMTP_HOST unset); they appear in this console"
+  fi
+  exec $PYTHON -m uvicorn aegis.ui.server:app --host 0.0.0.0 --port 8080 \
+    --ssl-certfile "$CERT" --ssl-keyfile ".aegis/tls/key.pem"
 else
-  echo "Launching ClearSky Sovereign Web Dashboard at http://127.0.0.1:8080..."
+  echo "Launching ClearSky at http://127.0.0.1:8080 (this machine only; use --lan for other devices)"
   exec $PYTHON -m uvicorn aegis.ui.server:app --host 127.0.0.1 --port 8080
 fi

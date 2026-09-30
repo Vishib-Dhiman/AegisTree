@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="day">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in · ClearSky</title>
+  <link rel="icon" type="image/png" href="logo-icon.png">
+  <script>
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem("clearsky_theme"); } catch (e) {}
+      if (t === "night") document.documentElement.setAttribute("data-theme", "night");
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=3.9">
+  <style>
+    .cs-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+    .cs-card {
+      width: 100%; max-width: 400px; padding: 32px 28px 26px; border-radius: 20px;
+      background: var(--surface); border: 1px solid var(--border);
+      box-shadow: 0 24px 60px -30px rgba(20, 60, 120, 0.45); backdrop-filter: blur(18px);
+    }
+    .cs-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+    .cs-brand img { width: 34px; height: 34px; border-radius: 9px; }
+    .cs-brand span { font-family: "Sora", var(--font-sans); font-weight: 700; font-size: 20px; color: var(--text-primary); }
+    .cs-card h1 { font-family: "Sora", var(--font-sans); font-size: 21px; margin: 0 0 6px; color: var(--text-primary); }
+    .cs-sub { margin: 0 0 20px; font-size: 14px; line-height: 1.55; color: var(--text-muted); }
+    .cs-sub strong { color: var(--text-primary); font-weight: 600; }
+    .cs-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin: 0 0 6px; }
+    .cs-input {
+      width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 12px; font: inherit; font-size: 15px;
+      color: var(--text-primary); background: transparent; border: 1px solid var(--border); outline: none;
+    }
+    .cs-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent); }
+    .cs-code { font-family: var(--font-mono); font-size: 26px; letter-spacing: 0.5em; text-align: center; padding-left: 0.5em; }
+    .cs-btn {
+      width: 100%; margin-top: 16px; padding: 12px 14px; border: 0; border-radius: 12px; cursor: pointer;
+      font: inherit; font-weight: 700; font-size: 15px; color: #fff; background: var(--brand-grad);
+    }
+    .cs-btn[disabled] { opacity: 0.55; cursor: default; }
+    .cs-link { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--brand); cursor: pointer; }
+    .cs-link[disabled] { color: var(--text-muted); cursor: default; }
+    .cs-row { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+    .cs-msg { min-height: 20px; margin-top: 12px; font-size: 13px; line-height: 1.5; }
+    .cs-msg.error { color: #d9485f; }
+    .cs-msg.note { color: var(--text-muted); }
+    .cs-foot { margin-top: 20px; font-size: 12px; line-height: 1.5; color: var(--text-muted); text-align: center; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main class="cs-login">
+    <div class="cs-card">
+      <div class="cs-brand"><img src="logo-icon.png" alt=""><span>ClearSky</span></div>
+
+      <form id="step-email" novalidate>
+        <h1>Sign in</h1>
+        <p class="cs-sub">Enter your email and we'll send you a 6-digit code. New here? The same code creates your account.</p>
+        <label class="cs-label" for="email">Email</label>
+        <input class="cs-input" id="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+        <button class="cs-btn" id="btn-send" type="submit">Send code</button>
+        <div class="cs-msg" id="msg-email" role="alert"></div>
+      </form>
+
+      <form id="step-code" hidden novalidate>
+        <h1>Check your email</h1>
+        <p class="cs-sub" id="code-sub">We sent a code to <strong id="code-email"></strong>. It expires in 10 minutes.</p>
+        <label class="cs-label" for="code">6-digit code</label>
+        <input class="cs-input cs-code" id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="••••••">
+        <button class="cs-btn" id="btn-verify" type="submit">Sign in</button>
+        <div class="cs-row">
+          <button class="cs-link" id="btn-change" type="button">Use a different email</button>
+          <button class="cs-link" id="btn-resend" type="button">Resend code</button>
+        </div>
+        <div class="cs-msg" id="msg-code" role="alert"></div>
+      </form>
+
+      <div class="cs-foot">Runs on this machine: models and your work never leave it.</div>
+    </div>
+  </main>
+  <script src="login.js?v=1"></script>
+</body>
+</html>

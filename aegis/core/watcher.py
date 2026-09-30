@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 # Same locations WorkspaceIngestor reads
 WATCHED_DIRS = ("docs/adr", "adr", "docs/decisions", "notes")
@@ -51,18 +51,21 @@ class ChangeEvent:
     removed: List[str] = field(default_factory=list)
     modified: List[str] = field(default_factory=list)
     error: Optional[str] = None
+    root: str = ""
 
 
 class WorkspaceWatcher:
-    """Calls on_change(changes) whenever the watched files of the current root change.
+    """Calls on_change(changes) whenever the watched files of a watched root change.
 
-    get_root returns the workspace to watch, or None to pause (No-workspace mode).
-    A change of root re-baselines silently: switching workspaces already reloads.
+    get_root returns the workspace(s) to watch: one path, a list (several users
+    in different workspaces), or None to pause. A root that starts being
+    watched is baselined silently (opening a workspace already loads it); one
+    that stops being watched is forgotten. changes["root"] names the workspace.
     """
 
     def __init__(
         self,
-        get_root: Callable[[], Optional[Path]],
+        get_root: Callable[[], Union[None, Path, Iterable[Path]]],
         on_change: Callable[[Dict[str, List[str]]], None],
         interval: float = 1.0,
         max_events: int = 50,
@@ -73,37 +76,45 @@ class WorkspaceWatcher:
         self.max_events = max_events
         self.events: List[ChangeEvent] = []
         self._seq = 0
-        self._root: Optional[Path] = None
-        self._prints: Fingerprint = {}
+        self._prints: Dict[Path, Fingerprint] = {}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
+    def _current_roots(self) -> List[Path]:
+        roots = self.get_root()
+        if roots is None:
+            return []
+        if isinstance(roots, (str, Path)):
+            return [Path(roots)]
+        return [Path(r) for r in roots]
+
     def poll_once(self) -> Optional[ChangeEvent]:
-        root = self.get_root()
-        if root is None:
-            self._root = None
-            return None
-        if root != self._root:
-            self._root, self._prints = root, fingerprint(root)
-            return None
+        """Check every watched root; returns the last event raised, if any."""
+        roots = self._current_roots()
+        for gone in set(self._prints) - set(roots):
+            del self._prints[gone]
+        last: Optional[ChangeEvent] = None
+        for root in roots:
+            if root not in self._prints:
+                self._prints[root] = fingerprint(root)
+                continue
+            new = fingerprint(root)
+            changes = diff_fingerprints(self._prints[root], new)
+            if not any(changes.values()):
+                continue
+            self._prints[root] = new
 
-        new = fingerprint(root)
-        changes = diff_fingerprints(self._prints, new)
-        if not any(changes.values()):
-            return None
-        self._prints = new
-
-        error = None
-        try:
-            self.on_change(changes)
-        except Exception as ex:  # keep watching even if one reload fails
-            error = str(ex)
-        with self._lock:
-            self._seq += 1
-            event = ChangeEvent(self._seq, time.time(), root.name, error=error, **changes)
-            self.events = (self.events + [event])[-self.max_events:]
-        return event
+            error = None
+            try:
+                self.on_change({**changes, "root": str(root)})
+            except Exception as ex:  # keep watching even if one reload fails
+                error = str(ex)
+            with self._lock:
+                self._seq += 1
+                last = ChangeEvent(self._seq, time.time(), root.name, error=error, root=str(root), **changes)
+                self.events = (self.events + [last])[-self.max_events:]
+        return last
 
     def events_since(self, seq: int) -> List[ChangeEvent]:
         with self._lock:

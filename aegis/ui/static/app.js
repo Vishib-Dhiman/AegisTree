@@ -1,3 +1,80 @@
+// ---- Signed-in user ----
+// Every API call needs a session; a 401 means it expired or was revoked.
+let currentUser = null;
+let THREADS_KEY = "clearsky_threads";
+(function guardFetch() {
+  const original = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const res = await original(...args);
+    const url = String((args[0] && args[0].url) || args[0] || "");
+    if (res.status === 401 && url.startsWith("/api/") && !url.startsWith("/api/auth/")) {
+      location.replace("/login.html");
+    }
+    return res;
+  };
+})();
+
+async function initUser() {
+  try {
+    const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (!res.ok) { location.replace("/login.html"); return; }
+    currentUser = (await res.json()).user;
+  } catch (e) {
+    return;
+  }
+  // Each person's chat threads live under their own key, even on a shared browser
+  THREADS_KEY = `clearsky_threads_${currentUser.id}`;
+  renderUserProfile();
+}
+
+function renderUserProfile() {
+  const profile = document.querySelector(".user-profile");
+  if (!profile || !currentUser) return;
+  const avatar = profile.querySelector(".user-avatar");
+  const name = profile.querySelector(".user-name");
+  const status = profile.querySelector(".user-status");
+  if (avatar) avatar.textContent = currentUser.initials;
+  if (name) {
+    name.textContent = currentUser.label;
+    name.title = "Click to change your display name";
+    name.style.cursor = "pointer";
+    name.onclick = renameUser;
+  }
+  if (status) status.innerHTML = `<i class="live-dot"></i>${escapeHtml(currentUser.email)}`;
+  if (!document.getElementById("btn-logout")) {
+    const btn = document.createElement("button");
+    btn.id = "btn-logout";
+    btn.type = "button";
+    btn.className = "input-action-btn";
+    btn.title = "Sign out";
+    btn.style.marginLeft = "auto";
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>';
+    btn.addEventListener("click", logout);
+    profile.appendChild(btn);
+  }
+}
+
+async function renameUser() {
+  const next = prompt("Display name", currentUser.display_name || "");
+  if (next === null) return;
+  const res = await fetch("/api/auth/me", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: next }),
+  });
+  if (res.ok) {
+    currentUser = (await res.json()).user;
+    renderUserProfile();
+    initGreeting();
+  }
+}
+
+async function logout() {
+  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
+  threads = [];
+  location.replace("/login.html");
+}
+
 // ClearSky Sovereign AI Assistant Client
 
 let currentRunId = null;
@@ -41,11 +118,13 @@ document.addEventListener("DOMContentLoaded", () => {
   initMemory();
   initAdrModal();
   initVisualGraph();
-  initThreads();
   initEventListeners();
   initTheme();
-  initGreeting();
   initAdrWatcher();
+  initUser().then(() => {
+    initThreads();
+    initGreeting();
+  });
 });
 
 // Live ingestion: the server reloads memory when ADRs or notes change on disk;
@@ -2145,7 +2224,7 @@ function clearRecentTasks() {
   if (!threads || threads.length === 0) return;
   if (!confirm("Clear all recent chat tasks?")) return;
   threads = [];
-  localStorage.removeItem("aegis_threads");
+  localStorage.removeItem(THREADS_KEY);
   activeThreadId = null;
   latestRunData = null;
   currentRunId = null;
@@ -2155,8 +2234,8 @@ function clearRecentTasks() {
 
 async function resetDemo() {
   const confirmed = confirm(
-    "Reset demo repository and memory back to clean state?\n\n" +
-    "This will:\n" +
+    "Reset the demo repositories and memory back to a clean state?\n\n" +
+    "This affects everyone signed in to this ClearSky. It will:\n" +
     "• Delete all recent chats and task history\n" +
     "• Erase all learned organizational memory habits\n" +
     "• Restore all Architecture Decisions (ADRs) to original seed state\n" +
@@ -2174,7 +2253,7 @@ async function resetDemo() {
 
     // 1. Wipe all local storage chats and recent task threads
     threads = [];
-    localStorage.removeItem("aegis_threads");
+    localStorage.removeItem(THREADS_KEY);
     activeThreadId = null;
     latestRunData = null;
     currentRunId = null;
@@ -2233,7 +2312,7 @@ function snapshotActiveThread() {
 
 function initThreads() {
   try {
-    const raw = localStorage.getItem("aegis_threads");
+    const raw = localStorage.getItem(THREADS_KEY);
     if (raw) {
       threads = JSON.parse(raw);
     }
@@ -2246,7 +2325,7 @@ function initThreads() {
 
 function saveThreads() {
   try {
-    localStorage.setItem("aegis_threads", JSON.stringify(threads));
+    localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
   } catch (e) {
     console.error("Failed to save threads to localStorage:", e);
   }

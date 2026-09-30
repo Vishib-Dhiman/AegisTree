@@ -5,7 +5,7 @@ Air-gapped configuration supporting strictly local System 1 and System 2 models.
 from __future__ import annotations
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 
@@ -81,6 +81,12 @@ class SystemConfig(BaseModel):
     workspace_root: str = "demo_vault"
     storage_dir: str = ".aegis"
     demo_port: int = 8080
+    # Multi-user: extra workspace folders users may open besides the built-in
+    # presets (anything else is refused, so a signed-in user can't point the
+    # server at arbitrary folders on this machine)
+    allowed_workspace_roots: List[str] = []
+    # Set by `demo.sh --lan`: marks session cookies Secure (HTTPS only)
+    https: bool = False
 
 
 class ConfigManager:

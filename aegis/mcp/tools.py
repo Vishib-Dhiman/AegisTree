@@ -119,8 +119,10 @@ def apply_patch(
     baseline_text: str = "",
     verdict_data: Optional[Dict[str, Any]] = None,
     decision_source: str = "",
+    actor: Optional[str] = None,
 ) -> Dict[str, Any]:
     """If approved is False, return {applied: False, reason: "human approval required"}.
+    actor (e.g. the signed-in user's email) is recorded on habits learned from this approval.
     If approved is True, run the section 11 checks and write.
     """
     if not approved:
@@ -194,6 +196,8 @@ def apply_patch(
     if model_output.strip():
         for details in extract_habits(extract_code(model_output), clean_code):
             details["workspace"] = str(root)
+            if actor:
+                details["learned_by"] = actor
             habit_nodes.append(graph.add_habit(details["label"], metadata=details))
     habit_node = habit_nodes[0] if habit_nodes else None
     habit_label = "; ".join(h.label for h in habit_nodes) or None

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resets demo_vault and rebuilds .aegis/memory.sqlite from scratch."""
+"""Resets demo_vault and its memory (learned habits included). Accounts and sessions are kept."""
 
 import sys
 from pathlib import Path
@@ -12,6 +12,7 @@ if str(root_dir) not in sys.path:
 from aegis.core.ingestion import WorkspaceIngestor
 from aegis.demo import seed_vault
 from aegis.system1.graph import MemoryGraph
+from clearsky.workspace_memory import workspace_slug
 
 
 def reset():
@@ -22,15 +23,16 @@ def reset():
     # 1. Restore demo_vault files
     seed_vault.write(vault_path)
 
-    # 2. Reset database
-    db_file = storage_path / "memory.sqlite"
-    for extra in ["", "-wal", "-shm"]:
-        p = Path(f"{db_file}{extra}")
-        if p.exists():
-            try:
-                p.unlink()
-            except Exception:
-                pass
+    # 2. Reset databases: the old single one and demo_vault's per-workspace one
+    for db_file in (storage_path / "memory.sqlite",
+                    storage_path / "workspaces" / workspace_slug(vault_path) / "memory.sqlite"):
+        for extra in ["", "-wal", "-shm"]:
+            p = Path(f"{db_file}{extra}")
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
 
     graph = MemoryGraph(storage_dir=storage_path)
     nodes, edges = WorkspaceIngestor.ingest_adrs(vault_path)

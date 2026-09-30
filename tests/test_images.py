@@ -130,16 +130,17 @@ def test_governed_stream_sends_images_to_the_leaf_call(monkeypatch, test_vault, 
     graph.replace_corpus(nodes, edges)
     gen = RecordingGenerator()
     monkeypatch.setattr(srv, "generator", gen)
-    monkeypatch.setattr(srv, "free_mode", False)
-    monkeypatch.setattr(srv, "workspace_root", test_vault)
-    monkeypatch.setattr(srv, "graph", graph)
-    monkeypatch.setattr(srv, "router", Router(graph=graph, config=srv.config, engine=srv.router.engine))
+    # The signed-in user's workspace is this isolated vault
+    router = Router(graph=graph, config=srv.config, engine=srv.memory.engine)
+    monkeypatch.setattr(srv, "_bind", lambda request: (test_vault, graph, router, False))
     req = srv.RunRequest(
         prompt="Add a persist_session_token function that stores the session token using our current vault standard.",
         images=[f"data:image/png;base64,{b64(PNG)}"],
     )
     scope = {"type": "http", "client": ("127.0.0.1", 1), "headers": []}
-    resp = srv.run_prompt_stream(req, StarletteRequest(scope))
+    request = StarletteRequest(scope)
+    request.state.user = {"id": 1, "email": "tester@example.com"}
+    resp = srv.run_prompt_stream(req, request)
 
     async def collect():
         return [chunk async for chunk in resp.body_iterator]
