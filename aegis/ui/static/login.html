@@ -17,7 +17,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=3.9">
   <style>
-    .cs-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+    /* The app's stylesheet locks page scrolling and styles <main>; the login page needs neither */
+    html, body { height: auto; min-height: 100%; }
+    body { overflow: auto; }
+    .cs-login { width: 100%; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
     .cs-card {
       width: 100%; max-width: 400px; padding: 32px 28px 26px; border-radius: 20px;
       background: var(--surface); border: 1px solid var(--border);
@@ -52,7 +55,7 @@
   </style>
 </head>
 <body>
-  <main class="cs-login">
+  <div class="cs-login">
     <div class="cs-card">
       <div class="cs-brand"><img src="logo-icon.png" alt=""><span>ClearSky</span></div>
 
@@ -80,7 +83,7 @@
 
       <div class="cs-foot">Runs on this machine: models and your work never leave it.</div>
     </div>
-  </main>
+  </div>
   <script src="login.js?v=1"></script>
 </body>
 </html>

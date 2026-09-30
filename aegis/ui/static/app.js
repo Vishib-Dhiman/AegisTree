@@ -27,6 +27,9 @@ async function initUser() {
   renderUserProfile();
 }
 
+const ICON_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const ICON_LOGOUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>';
+
 function renderUserProfile() {
   const profile = document.querySelector(".user-profile");
   if (!profile || !currentUser) return;
@@ -36,37 +39,77 @@ function renderUserProfile() {
   if (avatar) avatar.textContent = currentUser.initials;
   if (name) {
     name.textContent = currentUser.label;
-    name.title = "Click to change your display name";
+    name.title = `${currentUser.label} · click to rename`;
     name.style.cursor = "pointer";
-    name.onclick = renameUser;
+    name.onclick = startRename;
   }
-  if (status) status.innerHTML = `<i class="live-dot"></i>${escapeHtml(currentUser.email)}`;
-  if (!document.getElementById("btn-logout")) {
-    const btn = document.createElement("button");
-    btn.id = "btn-logout";
-    btn.type = "button";
-    btn.className = "input-action-btn";
-    btn.title = "Sign out";
-    btn.style.marginLeft = "auto";
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>';
-    btn.addEventListener("click", logout);
-    profile.appendChild(btn);
+  if (status) {
+    status.textContent = currentUser.email;
+    status.title = currentUser.email;
+  }
+
+  if (!document.getElementById("profile-actions")) {
+    const actions = document.createElement("div");
+    actions.id = "profile-actions";
+    actions.className = "profile-actions";
+    const button = (id, title, icon, onClick) => {
+      const btn = document.createElement("button");
+      btn.id = id;
+      btn.type = "button";
+      btn.className = "profile-icon-btn" + (id === "btn-logout" ? " danger" : "");
+      btn.title = title;
+      btn.setAttribute("aria-label", title);
+      btn.innerHTML = icon;
+      btn.addEventListener("click", onClick);
+      return btn;
+    };
+    actions.appendChild(button("btn-edit-name", "Edit display name", ICON_EDIT, startRename));
+    actions.appendChild(button("btn-logout", "Sign out", ICON_LOGOUT, logout));
+    profile.appendChild(actions);
   }
 }
 
-async function renameUser() {
-  const next = prompt("Display name", currentUser.display_name || "");
-  if (next === null) return;
-  const res = await fetch("/api/auth/me", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ display_name: next }),
-  });
-  if (res.ok) {
-    currentUser = (await res.json()).user;
+// Inline rename: the name becomes a text field; Enter saves, Esc or clicking away cancels
+function startRename() {
+  const name = document.querySelector(".user-profile .user-name");
+  if (!name || !currentUser || name.querySelector("input")) return;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 60;
+  input.value = currentUser.display_name || currentUser.label;
+  input.setAttribute("aria-label", "Display name");
+  input.style.cssText = "width:100%; font:inherit; font-weight:700; color:inherit; padding:2px 6px; margin:-3px 0 -3px -6px; border:1px solid var(--brand); border-radius:6px; background:var(--surface); outline:none;";
+  name.textContent = "";
+  name.onclick = null;
+  name.appendChild(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const value = input.value.trim();
+    if (save && value !== (currentUser.display_name || currentUser.label)) {
+      const res = await fetch("/api/auth/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ display_name: value }),
+      });
+      if (res.ok) currentUser = (await res.json()).user;
+      else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.detail || "Couldn't update your name.");
+      }
+    }
     renderUserProfile();
     initGreeting();
-  }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(false));
 }
 
 async function logout() {

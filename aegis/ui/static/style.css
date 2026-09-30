@@ -564,8 +564,25 @@ kbd {
   background: var(--brand-grad);
   flex-shrink: 0;
 }
-.user-info { display: flex; flex-direction: column; min-width: 0; }
+.user-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .user-name { font-weight: 700; font-size: 13.5px; }
+.user-profile .user-name,
+.user-profile .user-status { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-profile .user-status { font-family: var(--font-sans); font-size: 11.5px; margin-top: 1px; }
+.profile-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.profile-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.profile-icon-btn:hover { background: color-mix(in srgb, var(--text-primary) 8%, transparent); color: var(--text-primary); }
+.profile-icon-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.profile-icon-btn.danger:hover { color: var(--accent-red, #d9485f); }
 .user-status { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
 .live-dot {
   width: 7px; height: 7px; border-radius: 50%;
