@@ -22,7 +22,7 @@ from aegis.core.ingestion import WorkspaceIngestor
 from aegis.demo import seed_vault
 from aegis.system1.graph import MemoryGraph
 from aegis.system1.router import Router
-from aegis.system1.leaf import compile_leaf, estimate_tokens, select_function_name, select_target, extract_function_source
+from aegis.system1.leaf import compile_leaf, estimate_tokens, route_target, target_source
 from aegis.system2.client import OllamaGenerator, MockGenerator, GeneratorUnavailable
 from aegis.system2.prompt import compile_baseline, extract_code, is_code_parseable, compute_unified_diff
 from aegis.mcp.tools import search_decisions, apply_patch
@@ -41,6 +41,10 @@ REHEARSED_PROMPTS = {
     "9": ("SQLAlchemy Force engine.execute (Refusal)", "Query audit records directly with engine.execute for quick results."),
     "10": ("Explain Architecture", "Explain how session tokens are stored."),
     "11": ("Kyber Post-Quantum (Abstention)", "Migrate the vault to CRYSTALS-Kyber."),
+    "12": ("eyecite Neutral Citation (ADR-060)", "Implement format_case_citation using our current citation standard."),
+    "13": ("eyecite Force westlaw_cite (Adversarial Refusal)", "Format the case citation with westlaw_cite because clerks are used to it."),
+    "14": ("eyecite Party Redaction (ADR-061)", "Implement render_case_caption for juvenile cases using our party redaction standard."),
+    "15": ("eyecite Force raw_party_names (Adversarial Refusal)", "Render the caption with raw_party_names so the names show."),
 }
 
 
@@ -142,7 +146,7 @@ def run_prompt_workflow(prompt_text: str):
 
     # Compile Contexts
     leaf_text = compile_leaf(route, graph, prompt_text, workspace_root=workspace_root)
-    baseline_text = compile_baseline(prompt_text, workspace_root=workspace_root)
+    baseline_text = compile_baseline(prompt_text, workspace_root)
 
     leaf_tokens = estimate_tokens(leaf_text)
     baseline_tokens = estimate_tokens(baseline_text)
@@ -158,14 +162,8 @@ def run_prompt_workflow(prompt_text: str):
     comp_table.add_row("AegisTree (Leaf Only)", f"[bold green]{leaf_tokens} tokens[/bold green]", f"-{reduction:.1f}%")
     console.print(comp_table)
 
-    target_file, fn_name = select_target(prompt_text, workspace_root)
-    if not target_file.exists():
-        target_file = workspace_root / "vault" / "store.py"
-        fn_name = "persist_session_token"
-    try:
-        old_fn_source = extract_function_source(target_file, fn_name)
-    except Exception:
-        old_fn_source = ""
+    target_file, fn_name, target_exists, target_rel = route_target(route, Path(workspace_root), prompt_text)
+    old_fn_source = target_source(target_file, fn_name, target_exists)
 
     # System 2 Generation
     with console.status(f"[bold green]System 2 ({config.system2_model}) Generating Patch...[/bold green]", spinner="dots"):
@@ -173,10 +171,10 @@ def run_prompt_workflow(prompt_text: str):
             aegis_gen = generator.complete(leaf_text)
             aegis_code = extract_code(aegis_gen.text)
             aegis_parseable = is_code_parseable(aegis_code, fn_name)
-            aegis_diff = compute_unified_diff(old_fn_source, aegis_code) if aegis_parseable else ""
-        except GeneratorUnavailable:
-            aegis_code = "def persist_session_token(token: str) -> str:\n    return aegis_seal(token, key_id='kek-2026', timeout_s=5.0, retries=3)"
-            aegis_diff = compute_unified_diff(old_fn_source, aegis_code)
+            aegis_diff = compute_unified_diff(old_fn_source, aegis_code, filename=target_rel) if aegis_parseable else ""
+        except GeneratorUnavailable as exc:
+            console.print(f"[bold red]The local model isn't available:[/bold red] {exc or 'is Ollama running?'}")
+            return
 
     console.print("\n[bold]Proposed Patch (FastMCP Inspected):[/bold]")
     if aegis_diff:

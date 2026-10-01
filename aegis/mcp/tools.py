@@ -2,6 +2,7 @@
 """
 
 from __future__ import annotations
+import re
 import ast
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,8 @@ from aegis.system1.engine import DecisionEngine
 from aegis.system1.graph import MemoryGraph
 from aegis.system1.retrieval import apply_tie_break, needs_tie_break, resolve, retrieve, tie_break
 from aegis.system1.policy_guard import find_forbidden
-from aegis.system1.leaf import extract_function_source, select_function_name, select_target
+from aegis.system1.leaf import route_target, target_source
+from clearsky.targets import forget_index
 from aegis.system1.router import RouteResult, tokenize_text
 from aegis.system2.prompt import compute_unified_diff, extract_code
 
@@ -77,12 +79,8 @@ def propose_patch(
         target_path = root / rel_path
         old_source = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     else:
-        target_path, fn_name = select_target(prompt or clean_code, root)
-        rel_path = str(target_path.relative_to(root)) if target_path.is_relative_to(root) else str(target_path)
-        try:
-            old_source = extract_function_source(target_path, fn_name)
-        except Exception:
-            old_source = ""
+        target_path, fn_name, exists, rel_path = route_target(route, root, prompt or clean_code)
+        old_source = target_source(target_path, fn_name, exists)
 
     diff = compute_unified_diff(old_source, clean_code, filename=rel_path)
 
@@ -137,7 +135,7 @@ def apply_patch(
         target_file = (root / rel_path).resolve()
         fn_name = ""
     else:
-        target_file, fn_name = select_target(prompt or clean_code, root)
+        target_file, fn_name, _, _ = route_target(route, root, prompt or clean_code)
         target_file = target_file.resolve()
         rel_path = str(target_file.relative_to(root)) if target_file.is_relative_to(root) else str(target_file)
     if not target_file.is_relative_to(root):
@@ -186,8 +184,17 @@ def apply_patch(
 
     # 4. Write to disk
     if route.task_type == "implement_production":
-        fn_name = select_function_name(prompt or clean_code)
-        replace_function_source(target_file, fn_name, clean_code)
+        # The approved code names the function; replace it if the file has it, otherwise add it
+        m = re.search(r"^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)", clean_code, re.MULTILINE)
+        fn_name = m.group(1) if m else fn_name
+        existing = target_file.read_text(encoding="utf-8") if target_file.exists() else ""
+        if re.search(rf"^\s*(?:async\s+)?def\s+{re.escape(fn_name)}\b", existing, re.MULTILINE):
+            replace_function_source(target_file, fn_name, clean_code)
+        else:
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            sep = "" if not existing else ("\n\n" if existing.endswith("\n") else "\n\n\n")
+            target_file.write_text(existing + sep + clean_code.strip() + "\n", encoding="utf-8")
+        forget_index(root)
     else:
         target_file.write_text(clean_code, encoding="utf-8")
 

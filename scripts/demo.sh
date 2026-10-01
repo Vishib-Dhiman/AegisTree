@@ -26,7 +26,7 @@ fi
 
 # Check openJev Verdict v1.4 artifacts
 if [ -f "Verdict-open-jev/artifacts/v2/model.onnx" ] || [ -f "Verdict-open-jev/artifacts/v2/model.safetensors" ]; then
-  echo "✓ openJev Verdict v1.4 local weights verified (<35ms CPU latency)"
+  echo "✓ openJev Verdict local weights found (about 40 ms per decision on this CPU)"
 else
   echo "Notice: Verdict weights missing. Decision router will fall back to AST/keyword rules."
 fi

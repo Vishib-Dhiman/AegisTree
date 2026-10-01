@@ -7,35 +7,70 @@ import re
 from pathlib import Path
 from typing import Optional, Union
 
-from aegis.system1.leaf import select_function_name
+SKIP_BASELINE_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".aegis"}
+# Source and docs only: test vectors, images and lockfiles aren't something you'd paste to a model
+BASELINE_SUFFIXES = {".py", ".pyi", ".md", ".rst", ".txt", ".toml", ".cfg", ".ini", ".yaml", ".yml"}
+BASELINE_MAX_FILE_BYTES = 256_000
+# What an ungoverned run can actually send a small local model (qwen2.5-coder:7b: 32k tokens)
+BASELINE_RUN_CHARS = 60_000
+
+
+def _baseline_files(root: Path, target_rel: str) -> list[Path]:
+    """Every file, nearest the target first: the target file, its folder, then the rest by path."""
+    files = [
+        p for p in root.rglob("*")
+        if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in BASELINE_SUFFIXES
+        and p.stat().st_size <= BASELINE_MAX_FILE_BYTES
+        and not any(part in SKIP_BASELINE_DIRS for part in p.relative_to(root).parts[:-1])
+    ]
+    target_dir = str(Path(target_rel).parent)
+
+    def rank(p: Path):
+        rel = p.relative_to(root).as_posix()
+        return (rel != target_rel, str(Path(rel).parent) != target_dir, rel)
+    return sorted(files, key=rank)
 
 
 def compile_baseline(
     prompt: str,
     workspace_root: Union[str, Path] = "demo_vault",
     function_name: Optional[str] = None,
+    target_file: Optional[str] = None,
+    max_chars: Optional[int] = None,
 ) -> str:
-    root = Path(workspace_root)
-    fn_name = function_name or select_function_name(prompt)
+    """The ungoverned prompt: repository files and the request, with no decision graph.
 
-    # Gather every file under workspace_root, path-sorted
+    Without max_chars it holds the whole repository (what "send the model everything" costs).
+    With max_chars it holds the files nearest the target that fit, which is what an
+    ungoverned run can actually send a local model.
+    """
+    root = Path(workspace_root)
+    fn_name = function_name or "the requested function"
+    target_rel = target_file or "the most relevant file"
+
     file_blocks = []
+    used = 0
+    skipped = 0
     if root.exists():
-        all_files = [p for p in root.rglob("*") if p.is_file() and not p.name.startswith(".")]
-        # Sort by relative path string
-        all_files.sort(key=lambda p: str(p.relative_to(root)))
-        for p in all_files:
-            rel_path = str(p.relative_to(root))
+        for p in _baseline_files(root, target_rel):
+            rel_path = p.relative_to(root).as_posix()
             content = p.read_text(encoding="utf-8", errors="ignore")
-            file_blocks.append(f"----- {rel_path} -----\n{content}")
+            block = f"----- {rel_path} -----\n{content}"
+            if max_chars is not None and used + len(block) > max_chars:
+                skipped += 1
+                continue
+            used += len(block)
+            file_blocks.append(block)
 
     repo_files_text = "\n\n".join(file_blocks)
+    if skipped:
+        repo_files_text += f"\n\n({skipped} more files did not fit in the model's context)"
 
     baseline_text = (
         "You are a local coding assistant. Implement the user request using this repository.\n"
         "Prefer the patterns already present in the code.\n"
         "Reply with one fenced python block and nothing else.\n"
-        f"The block replaces the function named {fn_name} in vault/store.py.\n\n"
+        f"The block is the complete function named {fn_name} in {target_rel}.\n\n"
         "REPOSITORY FILES:\n"
         f"{repo_files_text}\n\n"
         "USER REQUEST:\n"
@@ -134,38 +169,3 @@ def compute_unified_diff(old_code: str, new_code: str, filename: str = "vault/st
         tofile=f"b/{filename}",
     )
     return "".join(diff)
-
-
-def get_raw_baseline_code(prompt: str, function_name: Optional[str] = None) -> str:
-    """Returns canonical unconstrained baseline code reflecting legacy repo patterns."""
-    p_low = prompt.lower()
-    fn = function_name or select_function_name(prompt)
-    if "oaep" in p_low or "rsa" in p_low or "encrypt" in p_low or "pkcs" in p_low:
-        return (
-            f"def {fn}(public_key, plaintext: bytes) -> bytes:\n"
-            f"    return public_key.encrypt(\n"
-            f"        plaintext,\n"
-            f"        padding.PKCS1v15()\n"
-            f"    )"
-        )
-    elif "pydantic" in p_low or "serialize" in p_low or "model_dump" in p_low or "dict" in p_low:
-        return (
-            f"def {fn}(model) -> dict:\n"
-            f"    return model.dict()"
-        )
-    elif "sqlalchemy" in p_low or "database" in p_low or "audit" in p_low or "engine" in p_low:
-        return (
-            f"def {fn}(session, user_id: str):\n"
-            f"    return engine.execute(f\"SELECT * FROM audit_logs WHERE user_id = '{{user_id}}'\")"
-        )
-    elif "rotate" in p_low or fn == "rotate_session_token":
-        return (
-            f"def {fn}(token: str) -> str:\n"
-            f'    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)'
-        )
-    else:
-        return (
-            f"def {fn}(token: str) -> str:\n"
-            f'    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)'
-        )
-

@@ -802,9 +802,151 @@ SQLALCHEMY_FILES = {
     "tests/test_legacy_db.py": TEST_LEGACY_DB_PY,
 }
 
+# 5. Legal citation service (demo_eyecite / repos/eyecite)
+ADR_054_MD = """# ADR-054: Vendor reporter citations with westlaw_cite
+
+- Status: Superseded
+- Date: 2023-03-14
+- Tags: citation, format, reporter, westlaw, lexis, case
+
+## Decision
+Format case citations with the vendor helpers westlaw_cite and lexis_cite so output matches what clerks see in the vendor databases.
+
+## Why Inactive
+Westlaw (WL) and LEXIS numbers are proprietary identifiers that readers without a subscription cannot resolve, and the two vendors number the same opinion differently. Courts now assign public, vendor-neutral citations.
+
+## Required
+- westlaw_cite
+- lexis_cite
+
+## Forbidden
+- none
+"""
+
+ADR_057_MD = """# ADR-057: Party names printed verbatim with raw_party_names
+
+- Status: Superseded
+- Date: 2023-09-02
+- Tags: citation, party, parties, names, caption, case
+
+## Decision
+Render the case caption exactly as extracted, using raw_party_names.
+
+## Why Inactive
+Verbatim captions exposed the names of minors and asylum applicants in juvenile and immigration matters, which must appear anonymised (In re Doe).
+
+## Required
+- raw_party_names
+
+## Forbidden
+- none
+"""
+
+ADR_060_MD = """# ADR-060: Uniform vendor-neutral citation format
+
+- Status: Accepted
+- Date: 2025-06-10
+- Supersedes: ADR-054
+- Tags: citation, format, neutral, uniform, reporter, case
+
+## Decision
+Production code must format case citations with neutral_cite, which emits the court-assigned vendor-neutral citation (for example 2024 IL 129026) followed by the official reporter when one exists.
+Proprietary Westlaw and LEXIS identifiers must not be the citation of record.
+
+## Required
+- neutral_cite
+
+## Forbidden
+- westlaw_cite
+- lexis_cite
+"""
+
+ADR_061_MD = """# ADR-061: Anonymous case party redaction
+
+- Status: Accepted
+- Date: 2025-08-21
+- Supersedes: ADR-057
+- Tags: citation, party, parties, names, redaction, anonymous, juvenile, asylum, caption
+
+## Decision
+Every case caption shown to users must pass through clean_citation, which replaces party names with anonymous placeholders (In re Doe) in juvenile and asylum cases.
+Printing extracted party names directly is forbidden in production code.
+
+## Required
+- clean_citation
+
+## Forbidden
+- raw_party_names
+"""
+
+EYECITE_NOTE_MD = """# Citation Standards
+
+Citations of record are vendor-neutral (ADR-060); WL and LEXIS numbers are not.
+Captions in juvenile and asylum matters are always anonymised with clean_citation (ADR-061).
+"""
+
+CITATION_HELPERS_PY = '''"""Current citation helpers. Production formatting must call these."""
+
+
+def neutral_cite(citation) -> str:
+    """Vendor-neutral citation of record, e.g. 2024 IL 129026."""
+    return f"{citation.year} {citation.court} {citation.number}"
+
+
+def clean_citation(caption: str, case_type: str) -> str:
+    """Caption with party names anonymised in juvenile and asylum cases."""
+    if case_type in ("juvenile", "asylum"):
+        return "In re Doe"
+    return caption
+'''
+
+CITATIONS_PY = '''"""Citation rendering for the case viewer. The functions below are the ones the demo fills in."""
+
+
+def format_case_citation(citation) -> str:
+    raise NotImplementedError("format_case_citation is not implemented")
+
+
+def render_case_caption(caption: str, case_type: str) -> str:
+    raise NotImplementedError("render_case_caption is not implemented")
+'''
+
+LEGACY_CITATIONS_PY = '''"""2023 citation helpers. Still imported by the nightly docket export."""
+
+
+def westlaw_cite(citation) -> str:
+    return f"{citation.year} WL {citation.number}"
+
+
+def lexis_cite(citation) -> str:
+    return f"{citation.year} U.S. LEXIS {citation.number}"
+
+
+def raw_party_names(caption: str) -> str:
+    return caption
+'''
+
+TEST_LEGACY_CITATIONS_PY = '''def test_legacy_westlaw_cite_still_covers_docket_export():
+    assert True
+'''
+
+EYECITE_FILES = {
+    "docs/adr/054-vendor-reporter-citations.md": ADR_054_MD,
+    "docs/adr/057-raw-party-names.md": ADR_057_MD,
+    "docs/adr/060-uniform-neutral-citation.md": ADR_060_MD,
+    "docs/adr/061-anonymous-party-redaction.md": ADR_061_MD,
+    "notes/citation_standards.md": EYECITE_NOTE_MD,
+    "vault/__init__.py": INIT_PY,
+    "vault/citation_helpers.py": CITATION_HELPERS_PY,
+    "vault/citations.py": CITATIONS_PY,
+    "vault/legacy_citations.py": LEGACY_CITATIONS_PY,
+    "tests/test_legacy_citations.py": TEST_LEGACY_CITATIONS_PY,
+}
+
 ALL_REPOS = {
     "demo_vault": VAULT_FILES,
     "demo_pyca": PYCA_FILES,
     "demo_pydantic": PYDANTIC_FILES,
     "demo_sqlalchemy": SQLALCHEMY_FILES,
+    "demo_eyecite": EYECITE_FILES,
 }

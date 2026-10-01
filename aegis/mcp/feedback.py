@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from aegis.core.models import GraphNode
 from aegis.system1.graph import MemoryGraph
-from aegis.system1.leaf import select_function_name
 
 
 def _constant_source(node: ast.AST) -> Optional[str]:

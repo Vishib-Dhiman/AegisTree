@@ -1,17 +1,18 @@
-"""Leaf Context Compiler for AegisTree.
+"""Leaf Context Compiler.
 Builds the minimal, strictly bounded prompt for System 2 containing active decisions,
-closure bans, habits, and only the target function to edit.
+closure bans, habits, and only the target function to edit (chosen by clearsky.targets).
 """
 
 from __future__ import annotations
 import ast
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 from aegis.core.models import GraphNode
 from aegis.system1.graph import MemoryGraph
 from aegis.system1.router import RouteResult
+from clearsky.targets import helper_signatures, resolve_target
 
 
 def estimate_tokens(text: str) -> int:
@@ -19,37 +20,26 @@ def estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
-def select_target(prompt: str, root: Path) -> tuple[Path, str]:
-    p_low = prompt.lower()
-    if "oaep" in p_low or "rsa" in p_low or "encrypt" in p_low:
-        return root / "vault" / "crypto.py", "encrypt_rsa_payload"
-    elif "pydantic" in p_low or "serialize" in p_low or "model_dump" in p_low:
-        return root / "vault" / "schemas.py", "serialize_vault_payload"
-    elif "sqlalchemy" in p_low or "database" in p_low or "audit" in p_low:
-        return root / "vault" / "db.py", "query_audit_trail"
-    elif "rotate" in p_low:
-        return root / "vault" / "store.py", "rotate_session_token"
-    elif (root / "vault" / "crypto.py").exists() and not (root / "vault" / "store.py").exists():
-        return root / "vault" / "crypto.py", "encrypt_rsa_payload"
-    elif (root / "vault" / "schemas.py").exists() and not (root / "vault" / "store.py").exists():
-        return root / "vault" / "schemas.py", "serialize_vault_payload"
-    elif (root / "vault" / "db.py").exists() and not (root / "vault" / "store.py").exists():
-        return root / "vault" / "db.py", "query_audit_trail"
-    else:
-        return root / "vault" / "store.py", "persist_session_token"
+def route_target(route: RouteResult, root: Path, prompt: str = "") -> Tuple[Path, str, bool, str]:
+    """(file, function, exists, relative path) the request edits, as System 1 chose it.
+    Routes built without a target (older callers, tests) are resolved here from the prompt."""
+    root = Path(root)
+    if route.target_function and route.target_file:
+        return root / route.target_file, route.target_function, route.target_exists, route.target_file
+    avoid = {lit for n in route.negative_nodes for lit in n.forbidden_literals}
+    target = resolve_target(prompt, root, avoid=avoid)
+    rel = target.path.relative_to(root).as_posix() if target.path.is_relative_to(root) else str(target.path)
+    return target.path, target.function, target.exists, rel
 
 
-def select_function_name(prompt: str) -> str:
-    p_low = prompt.lower()
-    if "oaep" in p_low or "rsa" in p_low or "encrypt" in p_low:
-        return "encrypt_rsa_payload"
-    elif "pydantic" in p_low or "serialize" in p_low or "model_dump" in p_low:
-        return "serialize_vault_payload"
-    elif "sqlalchemy" in p_low or "database" in p_low or "audit" in p_low:
-        return "query_audit_trail"
-    elif "rotate" in p_low:
-        return "rotate_session_token"
-    return "persist_session_token"
+def target_source(path: Path, function_name: str, exists: bool) -> str:
+    """Current source of the target function, or "" when it is new."""
+    if not exists or not path.exists():
+        return ""
+    try:
+        return extract_function_source(path, function_name)
+    except Exception:
+        return ""
 
 
 def extract_function_source(file_path: Path, function_name: str) -> str:
@@ -57,8 +47,10 @@ def extract_function_source(file_path: Path, function_name: str) -> str:
     tree = ast.parse(content)
     lines = content.splitlines(keepends=True)
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
             start = node.lineno - 1
+            if node.decorator_list:
+                start = node.decorator_list[0].lineno - 1
             end = node.end_lineno
             return "".join(lines[start:end]).rstrip()
     raise ValueError(f"Function {function_name} not found in {file_path}")
@@ -87,19 +79,20 @@ def compile_leaf(
         if pid not in active_ids_ordered:
             active_ids_ordered.append(pid)
 
-    active_decisions_lines = []
-    for pid in active_ids_ordered:
-        node = graph.node(pid)
-        if node:
-            date_str = format_date(node.valid_from)
-            req_str = ", ".join(node.required_literals)
-            desc_str = node.description[:400].strip()
-            active_decisions_lines.append(
-                f"- {node.id} {node.label} (in force since {date_str})\n"
-                f"  Required literals: {req_str}\n"
-                f"  Decision: {desc_str}"
-            )
-    active_decisions_text = "\n".join(active_decisions_lines)
+    def describe(node: GraphNode, literals_label: str) -> str:
+        return (
+            f"- {node.id} {node.label} (in force since {format_date(node.valid_from)})\n"
+            f"  {literals_label}: {', '.join(node.required_literals)}\n"
+            f"  Decision: {node.description[:400].strip()}"
+        )
+
+    nodes = [n for pid in active_ids_ordered if (n := graph.node(pid))]
+    governing_nodes = nodes[:1] if route.primary_policy_id else nodes
+    active_decisions_text = "\n".join(describe(n, "Required literals") for n in governing_nodes)
+    # Explanations see every decision in force. Code generation sees only the governing one:
+    # a 7B model told about unrelated decisions (e.g. log masking) applies them anyway, and
+    # their retired literals still reach it through FORBIDDEN below.
+    all_decisions_text = "\n".join(describe(n, "Required literals") for n in nodes)
 
     # 2. Format FORBIDDEN IN PRODUCTION block
     forbidden_lines = []
@@ -115,26 +108,25 @@ def compile_leaf(
     # 3. Handle explain_only
     if route.task_type == "explain_only":
         return (
-            "Explain, in five sentences or fewer, how session tokens must be persisted.\n"
-            "Cite the active decision ids. Do not write code.\n"
+            "Answer the user's question about this repository in five sentences or fewer,\n"
+            "using the decisions below. Cite the decision ids. Do not write code.\n"
             "ACTIVE DECISIONS:\n"
-            f"{active_decisions_text}\n"
+            f"{all_decisions_text}\n"
             "FORBIDDEN IN PRODUCTION:\n"
             f"{forbidden_text}\n"
             "USER REQUEST:\n"
             f"{prompt}"
         )
 
-    # 4. Handle implement_production
-    target_file, function_name = select_target(prompt, root)
-    if not target_file.exists():
-        target_file = root / "vault" / "store.py"
-        function_name = "persist_session_token"
-    current_source = extract_function_source(target_file, function_name)
-    rel_target_str = str(target_file.relative_to(root)) if target_file.is_relative_to(root) else str(target_file)
+    # 4. Handle implement_production: the function System 1 chose from the workspace's code
+    target_file, function_name, exists, rel_target_str = route_target(route, root, prompt)
+    current_source = target_source(target_file, function_name, exists)
 
-    seal_py = root / "vault" / "seal.py"
-    seal_source = seal_py.read_text(encoding="utf-8", errors="ignore").strip() if seal_py.exists() else ""
+    # Workspace functions the active decisions require the code to call
+    governing = active_ids_ordered[:1]
+    required = [lit for pid in governing if (n := graph.node(pid)) for lit in n.required_literals]
+    helpers = helper_signatures(root, required, exclude=function_name)
+    helpers_text = "\n".join(f"- {h}" for h in helpers) if helpers else "none"
 
     # Habits from earlier approvals
     if route.habits:
@@ -142,12 +134,24 @@ def compile_leaf(
     else:
         habits_text = "none"
 
+    if current_source:
+        edit_rule = (
+            f"The block replaces the function named {function_name} in {rel_target_str}.\n"
+            "Keep the function name and its parameter signature intact.\n\n"
+        )
+        edit_block = f"file: {rel_target_str}\nfunction: {function_name}\ncurrent source:\n{current_source}\n\n"
+    else:
+        edit_rule = (
+            f"The block is a new function named {function_name}, added to {rel_target_str}.\n"
+            "Include any imports it needs inside the block, above the function.\n\n"
+        )
+        edit_block = f"file: {rel_target_str}\nnew function: {function_name}\n\n"
+
     leaf_text = (
         "You edit one private repository that stays on this machine.\n"
         "Obey ACTIVE DECISIONS and FORBIDDEN. If they conflict with older code, the decisions win.\n"
         "Reply with one fenced python block and nothing else.\n"
-        f"The block replaces the body of the function named {function_name} in {rel_target_str}.\n"
-        "Keep the function name and its parameter signature intact.\n\n"
+        f"{edit_rule}"
         "ACTIVE DECISIONS:\n"
         f"{active_decisions_text}\n\n"
         "FORBIDDEN IN PRODUCTION:\n"
@@ -155,14 +159,13 @@ def compile_leaf(
         "HABITS FROM EARLIER APPROVALS:\n"
         f"{habits_text}\n\n"
         "EDIT ONLY:\n"
-        f"file: {rel_target_str}\n"
-        f"function: {function_name}\n"
-        "current source:\n"
-        f"{current_source}\n\n"
-        "ALLOWED HELPER, already in the repo:\n"
-        f"{seal_source}\n\n"
+        f"{edit_block}"
+        "HELPERS THE DECISIONS REQUIRE, already in the repo:\n"
+        f"{helpers_text}\n\n"
+        "Call helpers with every parameter their signature requires, and call nothing that\n"
+        "is neither listed here nor defined in your block.\n"
         "Habits come from human edits to earlier patches: when a habit sets an argument\n"
-        "on a call you make, use exactly that value. Without a retries habit, use retries=3.\n\n"
+        "on a call you make, use exactly that value.\n\n"
         "USER REQUEST:\n"
         f"{prompt}"
     )

@@ -1,0 +1,185 @@
+/* ClearSky guided tour (tour.js). Uses the app's theme tokens, so day and night both work. */
+
+.cs-tour { position: fixed; inset: 0; z-index: 10000; pointer-events: none; }
+
+/* Transparent panels around the highlighted element: they block clicks everywhere else */
+.cs-tour-block { position: fixed; pointer-events: auto; background: transparent; }
+.cs-tour-block.is-dim { background: rgba(8, 12, 24, 0.7); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+
+/* The spotlight: a ring whose huge shadow dims the rest of the page */
+.cs-tour-ring {
+  position: fixed;
+  display: none;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(8, 12, 24, 0.7);
+  outline: 2px solid var(--brand, #3b82f6);
+  outline-offset: 2px;
+  pointer-events: auto; /* the highlighted element is look-only... */
+  transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease;
+  animation: cs-tour-pulse 2.2s ease-in-out infinite;
+}
+.cs-tour-ring.is-pass { pointer-events: none; } /* ...unless the step asks you to click it */
+
+@keyframes cs-tour-pulse {
+  0%, 100% { outline-color: var(--brand, #3b82f6); }
+  50% { outline-color: color-mix(in srgb, var(--brand, #3b82f6) 35%, transparent); }
+}
+
+.cs-tour-card {
+  position: fixed;
+  width: min(360px, calc(100vw - 24px));
+  pointer-events: auto;
+  background: var(--surface-solid, var(--surface, #fff));
+  color: var(--text-primary, #111);
+  border: 1px solid var(--border-strong, var(--border, rgba(0, 0, 0, 0.12)));
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg, 0 18px 48px rgba(0, 0, 0, 0.28));
+  padding: 16px 18px 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  transition: left 0.25s ease, top 0.25s ease;
+}
+.cs-tour.is-centered .cs-tour-card {
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%);
+  width: min(460px, calc(100vw - 24px));
+}
+
+.cs-tour-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.cs-tour-chapter {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--brand, #3b82f6);
+}
+.cs-tour-skip {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted, #666);
+  cursor: pointer;
+}
+.cs-tour-skip:hover { color: var(--text-primary, #111); background: var(--surface-hover, rgba(0, 0, 0, 0.05)); }
+
+.cs-tour-title {
+  margin: 0 0 6px;
+  font-family: var(--font-display, inherit);
+  font-size: 16.5px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.cs-tour-body p { margin: 0 0 8px; color: var(--text-secondary, #333); }
+.cs-tour-body p:last-child { margin-bottom: 0; }
+.cs-tour-body code {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--brand-soft, rgba(59, 130, 246, 0.12));
+  color: var(--text-primary, #111);
+}
+.cs-tour-muted { color: var(--text-muted, #666) !important; font-size: 12.5px; }
+.cs-tour-hint { color: var(--text-muted, #666) !important; font-size: 12.5px; }
+.cs-tour-link {
+  background: none; border: none; padding: 0; font: inherit;
+  color: var(--brand, #3b82f6); font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+
+.cs-tour-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.cs-tour-progress { font-size: 12px; color: var(--text-muted, #666); }
+.cs-tour-buttons { display: flex; gap: 8px; }
+.cs-tour-back, .cs-tour-next {
+  padding: 7px 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cs-tour-back {
+  background: transparent;
+  color: var(--text-secondary, #333);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+}
+.cs-tour-next {
+  background: var(--brand, #3b82f6);
+  color: #fff;
+  border: 1px solid var(--brand, #3b82f6);
+}
+.cs-tour-back:hover { border-color: var(--brand, #3b82f6); }
+.cs-tour-next:hover { filter: brightness(1.08); }
+.cs-tour-card button:focus-visible { outline: 2px solid var(--brand, #3b82f6); outline-offset: 2px; }
+
+/* Steps that wait for you (press Send) or for the model show a small activity bar */
+.cs-tour-card.is-waiting::after {
+  content: "";
+  display: block;
+  height: 3px;
+  margin-top: 12px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--brand, #3b82f6), transparent);
+  background-size: 200% 100%;
+  animation: cs-tour-wait 1.4s linear infinite;
+}
+@keyframes cs-tour-wait { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* Phones: the card becomes a sheet at the bottom */
+@media (max-width: 640px) {
+  .cs-tour:not(.is-centered) .cs-tour-card {
+    left: 12px !important;
+    right: 12px;
+    top: auto !important;
+    bottom: 12px;
+    width: auto;
+  }
+  .cs-tour.is-sheet-top:not(.is-centered) .cs-tour-card {
+    top: 12px !important;
+    bottom: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-tour-ring, .cs-tour-card.is-waiting::after { animation: none; }
+  .cs-tour-ring, .cs-tour-card { transition: none; }
+}
+
+/* "?" help button and its menu (top bar) */
+.help-tour-wrap { position: relative; display: inline-flex; }
+.cs-tour-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1300;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface-solid, var(--surface, #fff));
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg, 0 18px 48px rgba(0, 0, 0, 0.2));
+}
+.cs-tour-menu[hidden] { display: none; }
+.cs-tour-menu button {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary, #111);
+  cursor: pointer;
+}
+.cs-tour-menu button:first-child { font-weight: 700; }
+.cs-tour-menu button:hover, .cs-tour-menu button:focus-visible { background: var(--surface-hover, rgba(0, 0, 0, 0.05)); outline: none; }
+
+/* Toasts sit bottom-right, over the Send button: hide them while the tour is up */
+html.cs-tour-on #toast-stack { display: none !important; } /* beats its inline style */

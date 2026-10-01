@@ -152,6 +152,8 @@ class OllamaGenerator:
     def _stream_json(self, url: str, payload: dict):
         try:
             with self.client.stream("POST", url, json=payload, timeout=self.timeout) as resp:
+                if resp.status_code >= 400:
+                    resp.read()  # so the error handler below can read Ollama's message
                 resp.raise_for_status()
                 for line in resp.iter_lines():
                     if not line:

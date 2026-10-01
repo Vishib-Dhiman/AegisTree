@@ -103,6 +103,12 @@ class RouteResult(BaseModel):
     system1_latency_ms: Optional[float] = None
     block_confidence: Optional[float] = None
     revived_policy_id: Optional[str] = None
+    # Function the request edits (implement_production only); path is relative to the workspace
+    target_file: Optional[str] = None
+    target_function: Optional[str] = None
+    target_exists: bool = False
+    target_reason: Optional[str] = None
+    target_source: Optional[str] = None
 
 
 class BlockResult(BaseModel):
@@ -512,6 +518,10 @@ class Router:
                     **retrieval_fields,
                 )
 
+        target_fields: Dict[str, Any] = {}
+        if task_type == "implement_production":
+            target_fields = self._target_fields(prompt, root, negative_nodes)
+
         return RouteResult(
             status="ready",
             task_type=task_type,
@@ -529,4 +539,22 @@ class Router:
             excluded_files=excluded_files,
             abstain_reason=None,
             **retrieval_fields,
+            **target_fields,
         )
+
+    def _target_fields(self, prompt: str, root: Path, negative_nodes: List[GraphNode]) -> Dict[str, Any]:
+        from clearsky.targets import resolve_target
+
+        avoid = {lit for n in negative_nodes for lit in n.forbidden_literals}
+        try:
+            target = resolve_target(prompt, root, engine=self.engine, avoid=avoid)
+        except Exception as exc:  # never let target selection break routing
+            return {"target_reason": f"could not choose a function: {exc}"}
+        rel = target.path.relative_to(root).as_posix() if target.path.is_relative_to(root) else str(target.path)
+        return {
+            "target_file": rel,
+            "target_function": target.function,
+            "target_exists": target.exists,
+            "target_reason": target.reason,
+            "target_source": target.source,
+        }

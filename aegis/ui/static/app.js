@@ -127,17 +127,21 @@ let currentAppMode = "chat";
 let latestRunData = null;
 
 const PROMPTS = {
-  persist: "Add a persist_session_token function that stores the session token using our current vault standard.",
-  rotate: "Add a rotate_session_token function using our current vault standard.",
-  force_legacy: "Persist the session token with legacy_wrap because it is faster.",
-  pyca_oaep: "Implement encrypt_rsa_payload to encrypt data using our current PyCA cryptography standard.",
-  pyca_pkcs: "Implement encrypt_rsa_payload using PKCS1v15 padding because it is simpler.",
-  pydantic_v2: "Implement serialize_vault_payload using our current Pydantic standard.",
-  pydantic_v1: "Serialize the model with .dict() like in older versions.",
-  db_sqlalchemy: "Implement query_audit_trail to fetch audit logs using our current SQLAlchemy database standard.",
-  db_engine: "Query audit records directly with engine.execute for quick results.",
-  explain: "Explain how session tokens are stored.",
-  kyber: "Migrate the vault to CRYSTALS-Kyber."
+  persist: "Finish the code that keeps a user's sign-in token for later, done the approved way.",
+  rotate: "Implement replacing a session token with a new one, the way we're supposed to now.",
+  force_legacy: "Go back to how we wrapped tokens before the sealing change; it was faster.",
+  pyca_oaep: "Encrypt a payload with the recipient's RSA key, the way our security standard says now.",
+  pyca_pkcs: "Encrypt the RSA payload the way we did in 2024, with the old PKCS padding.",
+  pydantic_v2: "Turn a vault payload model into plain data for the API, the way we do it now.",
+  pydantic_v1: "Convert the model to a dictionary with the old version-one method like we used to.",
+  db_sqlalchemy: "Pull a user's audit trail from the database the way our current standard says.",
+  db_engine: "Go back to running queries straight on the engine like before the 2.0 upgrade; it's quicker.",
+  cite_neutral: "Format how a case is cited, the neutral way our policy says now.",
+  cite_westlaw: "Format the case citation with the westlaw cite helper because clerks are used to it.",
+  cite_redact: "Render case captions for juvenile and asylum cases following our privacy rules.",
+  cite_rawnames: "Go back to printing party names in captions exactly as extracted, like before the redaction rule.",
+  explain: "How do we keep people's sign-in tokens safe these days, and why?",
+  kyber: "Make the vault safe against future quantum computers."
 };
 
 const PRESET_TITLES = {
@@ -150,6 +154,10 @@ const PRESET_TITLES = {
   pydantic_v1: "Pydantic Force .dict()",
   db_sqlalchemy: "SQLAlchemy 2.0 (ADR-045)",
   db_engine: "SQL Force engine.execute",
+  cite_neutral: "Neutral Citation (ADR-060)",
+  cite_westlaw: "Force westlaw_cite (Refusal)",
+  cite_redact: "Party Redaction (ADR-061)",
+  cite_rawnames: "Force raw_party_names (Refusal)",
   kyber: "Migrate Kyber (Abstention)",
   explain: "Explain Architecture"
 };
@@ -169,8 +177,28 @@ document.addEventListener("DOMContentLoaded", () => {
   initUser().then(() => {
     initThreads();
     initGreeting();
+    if (window.ClearSkyTour && currentUser) window.ClearSkyTour.maybeAutoStart(currentUser);
   });
 });
+
+// What the guided tour (tour.js) drives: it uses the same actions a person would
+window.ClearSky = {
+  prompts: () => PROMPTS,
+  user: () => currentUser,
+  workspace: () => currentWorkspaceName,
+  isBusy: () => runsPending > 0,
+  switchWorkspace: (name) => switchToWorkspace(name),
+  newTask: () => document.getElementById("btn-new-session").click(),
+  setMode: (mode) => setAppMode(mode),
+  setDrawer: (open) => {
+    const drawer = document.getElementById("memory-drawer");
+    if (!drawer) return;
+    if (open && !drawer.classList.contains("open")) document.getElementById("nav-memory").click();
+    if (!open) drawer.classList.remove("open");
+  },
+  closeAdr: () => closeAdrModal(),
+  toast: (title, body) => showToast(title, escapeHtml(body)),
+};
 
 // Live ingestion: the server reloads memory when ADRs or notes change on disk;
 // tell the user and refresh the memory panel.
@@ -321,6 +349,10 @@ function initEventListeners() {
     pydantic_v1: "pydantic",
     db_sqlalchemy: "sqlalchemy",
     db_engine: "sqlalchemy",
+    cite_neutral: "eyecite",
+    cite_westlaw: "eyecite",
+    cite_redact: "eyecite",
+    cite_rawnames: "eyecite",
   };
 
   document.querySelectorAll("[data-prompt]").forEach(elem => {
@@ -1015,12 +1047,6 @@ async function switchToWorkspace(targetPath) {
     updateComposerMode();
     const labelEl = document.getElementById("workspace-label");
     if (labelEl) labelEl.textContent = data.name;
-    const pathInput = document.getElementById("workspace-path-input");
-    if (pathInput) pathInput.value = data.workspace_root;
-    const statusInfo = document.getElementById("workspace-status-info");
-    if (statusInfo) {
-      statusInfo.textContent = `Active: ${data.workspace_root} (${data.adr_count} ADRs, ${data.note_count} Notes)`;
-    }
     await initMemory();
     return data;
   } catch (err) {
@@ -1035,9 +1061,6 @@ async function initWorkspace() {
   const backdrop = document.getElementById("workspace-modal-backdrop");
   const btnClose = document.getElementById("btn-workspace-close");
   const btnCancel = document.getElementById("btn-workspace-cancel");
-  const btnSwitch = document.getElementById("btn-workspace-switch");
-  const pathInput = document.getElementById("workspace-path-input");
-  const statusInfo = document.getElementById("workspace-status-info");
   const presetsContainer = document.getElementById("workspace-presets-container");
 
   async function fetchCurrentWorkspace() {
@@ -1048,10 +1071,6 @@ async function initWorkspace() {
       currentWorkspaceName = data.active;
       updateComposerMode();
       if (labelEl) labelEl.textContent = data.active || "workspace";
-      if (pathInput) pathInput.value = data.active_path || "demo_vault";
-      if (statusInfo) {
-        statusInfo.textContent = `Active: ${data.active_path}`;
-      }
 
       if (presetsContainer && data.presets) {
         presetsContainer.innerHTML = "";
@@ -1094,7 +1113,6 @@ async function initWorkspace() {
     if (backdrop) {
       backdrop.style.display = "flex";
       fetchCurrentWorkspace();
-      setTimeout(() => pathInput && pathInput.focus(), 50);
     }
   }
 
@@ -1116,28 +1134,6 @@ async function initWorkspace() {
       closeWorkspaceModal();
     }
   });
-
-  if (btnSwitch) {
-    btnSwitch.addEventListener("click", async () => {
-      const targetPath = (pathInput ? pathInput.value : "").trim();
-      if (!targetPath) {
-        alert("Please enter a valid directory path.");
-        return;
-      }
-      btnSwitch.disabled = true;
-      btnSwitch.textContent = "Switching...";
-
-      try {
-        await switchToWorkspace(targetPath);
-        closeWorkspaceModal();
-      } catch (err) {
-        alert("Cannot switch workspace: " + err.message);
-      } finally {
-        btnSwitch.disabled = false;
-        btnSwitch.textContent = "Switch";
-      }
-    });
-  }
 
   await fetchCurrentWorkspace();
 }
@@ -1733,6 +1729,7 @@ function runWithPrompt(promptText, presetTitle = null, images = [], docs = []) {
 }
 
 async function runWithPromptNow(promptText, presetTitle = null, images = [], queued = null, docs = []) {
+  window.dispatchEvent(new CustomEvent("clearsky:run-started", { detail: { prompt: promptText } }));
   document.getElementById("hero-view").style.display = "none";
   const messagesStream = document.getElementById("messages-stream");
   messagesStream.style.display = "flex";
@@ -2130,6 +2127,7 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
 
     // Render response into assistantMsg
     renderAssistantResponse(assistantMsg, data, promptText);
+    window.dispatchEvent(new CustomEvent("clearsky:run-finished", { detail: { data, element: assistantMsg } }));
     keepDocuments(data.document_texts);
     if (docs.length && !(data.documents || []).length) {
       // An older server ignores the documents field: say so rather than let the model guess
@@ -2150,6 +2148,7 @@ async function runWithPromptNow(promptText, presetTitle = null, images = [], que
     const title = e.status === 429 ? "Still busy" : e.rejected ? "Couldn't send that" : "Execution Error";
     assistantMsg.innerHTML = `<div class="banner-blocked"><span class="banner-title-blocked">${title}</span><span class="banner-body">${escapeHtml(e.message)}</span></div>`;
     snapshotActiveThread();
+    window.dispatchEvent(new CustomEvent("clearsky:run-finished", { detail: { error: e.message, element: assistantMsg } }));
   } finally {
     clearInterval(timerInterval);
     document.removeEventListener("keydown", onEsc);
@@ -2416,9 +2415,7 @@ function renderAssistantResponse(container, data, promptText) {
   codeCard.dataset.aegisDiff = aegisDiff;
   codeCard.dataset.baselineDiff = baselineDiff;
   codeCard.dataset.aegisMeta = `Aegis: ${data.tokens ? data.tokens.leaf : 0} tokens · ${Math.round(data.aegis ? data.aegis.latency_ms : 0)}ms`;
-  codeCard.dataset.baselineMeta = data.baseline && data.baseline.source === "model"
-    ? `Raw Baseline: ${data.tokens ? data.tokens.baseline : "n/a"} tokens · ${Math.round(data.baseline.latency_ms || 0)}ms`
-    : `Legacy pattern (illustrative) · full-repo prompt ${data.tokens ? data.tokens.baseline : "n/a"} tokens`;
+  codeCard.dataset.baselineMeta = baselineMetaText(data);
 
   const chunks = parseDiffToChunks(aegisDiff, data.aegis ? data.aegis.code : "");
 
@@ -2459,7 +2456,7 @@ function renderAssistantResponse(container, data, promptText) {
     <div class="code-card-header">
       <div style="display:flex; align-items:center; gap:8px;">
         <span style="font-weight:600; font-size:13px; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
-          <span style="color:var(--accent-green); font-size:11px;">●</span> ClearSky Patch (Compliant)
+          <span style="color:var(${isUnparseable ? "--accent-amber" : "--accent-green"}); font-size:11px;">●</span> ${isUnparseable ? "No patch this time" : "ClearSky Patch (Compliant)"}
         </span>
         <span class="file-badge">${escapeHtml(targetFileLabel)}</span>
         <span class="review-hint" style="font-size:11.5px; color:var(--text-muted); margin-left:4px;">Tip: edit retries or timeout_s to train organizational memory</span>
@@ -2991,6 +2988,48 @@ function setAppMode(mode) {
   }
 }
 
+function baselineMetaText(data) {
+  const b = data && data.baseline;
+  if (b && b.source === "model") {
+    return `Without ClearSky: ${b.prompt_tokens || "n/a"} tokens · ${Math.round(b.latency_ms || 0)}ms`;
+  }
+  return "Without ClearSky: not run yet. Open the Diff Inspector to run it.";
+}
+
+// The ungoverned comparison: the same local model and request, repo files instead of the
+// decision graph. It runs only when asked, so it never delays the governed answer.
+async function runUngovernedBaseline(runData) {
+  const resp = await fetch(`/api/run/${encodeURIComponent(runData.run_id)}/baseline`, { method: "POST" });
+  let body = {};
+  try { body = await resp.json(); } catch (_) { /* not JSON */ }
+  if (!resp.ok) throw new Error(body.detail || `HTTP ${resp.status}`);
+  runData.baseline = body;
+  return body;
+}
+
+function renderBaselinePrompt(box, runData, onDone) {
+  const unavailable = runData.baseline && runData.baseline.source === "unavailable";
+  box.innerHTML = `
+    <div class="baseline-run-prompt">
+      <p>Send the same request to the same local model with the repository files that fit in its context and no decision graph, to see what it writes without ClearSky.</p>
+      ${unavailable ? `<p class="baseline-run-error">${escapeHtml(runData.baseline.text || "The local model isn't available.")}</p>` : ""}
+      <button class="baseline-run-btn" type="button">Show without ClearSky</button>
+    </div>`;
+  const btn = box.querySelector(".baseline-run-btn");
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Running on the local model…";
+    try {
+      await runUngovernedBaseline(runData);
+      onDone();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Run without ClearSky";
+      showToast("Comparison didn't run", String(err.message || err));
+    }
+  });
+}
+
 function renderDiffInspectorContent(container) {
   if (!container) return;
 
@@ -3025,7 +3064,8 @@ function renderDiffInspectorContent(container) {
   const d = latestRunData;
   const aegisDiff = d.aegis ? (d.aegis.diff || d.aegis.code || d.aegis.text) : "";
   const baselineDiff = d.baseline ? (d.baseline.diff || d.baseline.code || d.baseline.text) : "";
-  const baselineIsTemplate = !d.baseline || d.baseline.source !== "model";
+  const baselineRan = !!(d.baseline && (d.baseline.source === "model" || d.baseline.source === "illustrative"));
+  const baselineScripted = !!(d.baseline && d.baseline.source === "illustrative");
   const policyId = (d.policy && d.policy.primary_id) || "no decision";
   const leafTokens = d.tokens && d.tokens.leaf ? d.tokens.leaf : null;
   const baselineTokens = d.tokens && d.tokens.baseline ? d.tokens.baseline : null;
@@ -3057,10 +3097,10 @@ function renderDiffInspectorContent(container) {
       <div class="diff-pane baseline">
         <div class="diff-pane-header">
           <div class="diff-pane-title">
-            <span>${baselineIsTemplate ? "Legacy pattern" : "Ungoverned baseline"}</span>
-            <span class="diff-pane-badge">${baselineIsTemplate ? "Illustrative, not a model run" : "Model output, full repo context"}</span>
+            <span>Without ClearSky</span>
+            <span class="diff-pane-badge">${baselineScripted ? "Illustrative example · what the repo's old code pattern produces" : baselineRan ? `Same model, no decision graph${d.baseline.model ? ` · ${escapeHtml(d.baseline.model)}` : ""}` : "Not run yet"}</span>
           </div>
-          <span class="code-meta">${tok(baselineTokens)}</span>
+          <span class="code-meta">${baselineRan && !baselineScripted ? `${tok(d.baseline.prompt_tokens)} · ${Math.round(d.baseline.latency_ms || 0)}ms` : ""}</span>
         </div>
         <div class="diff-pane-content" id="inspector-baseline-diff"></div>
       </div>
@@ -3080,7 +3120,13 @@ function renderDiffInspectorContent(container) {
 
   const baseContainer = container.querySelector("#inspector-baseline-diff");
   const aegisContainer = container.querySelector("#inspector-aegis-diff");
-  if (baseContainer) renderDiffLines(baseContainer, baselineDiff);
+  if (baseContainer) {
+    if (baselineRan) {
+      renderDiffLines(baseContainer, baselineDiff || "(the model didn't return the requested function)");
+    } else {
+      renderBaselinePrompt(baseContainer, d, () => renderDiffInspectorContent(container));
+    }
+  }
   if (aegisContainer) renderDiffLines(aegisContainer, aegisDiff);
 
   const btnBack = container.querySelector("#btn-inspector-to-chat");

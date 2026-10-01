@@ -1,12 +1,10 @@
 """
-End-to-End Hackathon Integration Test for AegisTree [OG Version].
-Verifies the complete 3-minute pitch demo flow:
-1. Seed sensitive vault repository
-2. System 1 Decision Routing via openJev Verdict v1.4 (<40ms latency)
-3. Token compression (>90% reduction)
-4. Sovereign Refusal on adversarial / deprecated prompt
-5. FastMCP patch execution and closed-loop memory synthesis
-6. Dynamic System 2 Model Switching (Qwen vs DeepSeek R1)
+End-to-end test of the demo flow:
+1. Seed the demo vault
+2. Route with System 1 (openJev Verdict), within a real-time budget once warm
+3. Leaf prompt much smaller than the full-repository baseline
+4. Refusal of a request for a superseded pattern
+5. Patch application and habit learning from the reviewer's edit
 """
 
 import pytest
@@ -48,12 +46,14 @@ def test_e2e_pitch_demo_standard_flow(clean_sandbox):
     repo_dir, graph, router = clean_sandbox
     prompt = "Add a persist_session_token function that stores the session token using our current vault standard."
 
-    # 1. Route with System 1 (openJev Verdict v1.4)
+    # 1. Route with System 1 (openJev Verdict). The first call pays one-time
+    # warm-up; the budget is for a warm engine, so time a few calls after it.
     route = router.route(prompt, workspace_root=repo_dir)
     assert route.status == "ready"
     assert route.task_type in ("implement_production", "code")
     assert route.primary_policy_id == "adr:014-aegis-seal"
-    assert route.verdict_latency_ms < 100.0  # Real-time sub-100ms budget
+    warm = sorted(router.route(prompt, workspace_root=repo_dir).verdict_latency_ms for _ in range(3))
+    assert warm[1] < 100.0  # median of three warm task decisions
 
     # 2. Token compression verification
     leaf_text = compile_leaf(route, graph, prompt, workspace_root=repo_dir)

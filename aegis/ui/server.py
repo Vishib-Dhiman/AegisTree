@@ -29,7 +29,7 @@ from aegis.demo import seed_vault
 from aegis.mcp.tools import apply_patch, propose_patch, search_decisions
 from aegis.system1.engine import EngineUnavailable
 from aegis.system1.graph import MemoryGraph
-from aegis.system1.leaf import compile_leaf, estimate_tokens, extract_function_source, select_function_name, select_target
+from aegis.system1.leaf import compile_leaf, estimate_tokens, route_target, target_source
 from aegis.system1.router import Router, scoped_exclusions
 from aegis.system2.client import GeneratorUnavailable, MockGenerator, OllamaGenerator
 from aegis.system2.websearch import SearchOutcome, WebSearcher, format_for_prompt
@@ -51,11 +51,11 @@ from clearsky.shared_folder import ClientToolBridge, client_rules, normalize_cal
 from clearsky.speech import MAX_AUDIO_BYTES, SpeechError, SpeechToText
 from clearsky.workspace_memory import WorkspaceMemory
 from aegis.system2.prompt import (
+    BASELINE_RUN_CHARS,
     compile_baseline,
     build_free_messages,
     compute_unified_diff,
     extract_code,
-    get_raw_baseline_code,
     is_code_parseable,
 )
 
@@ -115,6 +115,8 @@ PRESET_WORKSPACES = {
     "demo_pydantic": PROJECT_ROOT / "repos" / "pydantic",
     "sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
     "demo_sqlalchemy": PROJECT_ROOT / "repos" / "sqlalchemy",
+    "eyecite": PROJECT_ROOT / "repos" / "eyecite",
+    "demo_eyecite": PROJECT_ROOT / "repos" / "eyecite",
 }
 
 
@@ -848,28 +850,16 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
     leaf_text = compile_leaf(route, graph, prompt, workspace_root=workspace_root)
     if attachments.block:
         leaf_text = f"{leaf_text}\n\n{attachments.block}"
-    baseline_text = compile_baseline(prompt, workspace_root=workspace_root)
+    target_file, fn_name, target_exists, target_rel = route_target(route, Path(workspace_root), prompt)
+    old_fn_source = target_source(target_file, fn_name, target_exists)
+    baseline_text = compile_baseline(prompt, workspace_root, fn_name, target_rel)
+    baseline_run_text = compile_baseline(prompt, workspace_root, fn_name, target_rel, max_chars=BASELINE_RUN_CHARS)
 
     leaf_tokens = estimate_tokens(leaf_text)
     baseline_tokens = estimate_tokens(baseline_text)
+    baseline_run = {"baseline_run_text": baseline_run_text, "target_function": fn_name,
+                    "old_fn_source": old_fn_source, "target_file": target_rel}
 
-    target_file, fn_name = select_target(prompt, workspace_root)
-    if not target_file.exists():
-        target_file = workspace_root / "vault" / "store.py"
-        fn_name = "persist_session_token"
-    try:
-        old_fn_source = extract_function_source(target_file, fn_name)
-    except Exception:
-        old_fn_source = ""
-
-    baseline_data: Dict[str, Any] = {
-        "text": "",
-        "code": "",
-        "diff": "",
-        "latency_ms": 0.0,
-        "unparseable": False,
-        "source": "model",
-    }
     aegis_data: Dict[str, Any] = {
         "text": "",
         "code": "",
@@ -879,31 +869,8 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
         "leaf": leaf_text,
     }
 
-    # Call generator sequentially: baseline first, aegis second
-    try:
-        base_gen = generator.complete(baseline_text)
-        base_code = extract_code(base_gen.text)
-        base_parseable = is_code_parseable(base_code, fn_name)
-        base_diff = compute_unified_diff(old_fn_source, base_code) if base_parseable else ""
-        if base_diff:
-            baseline_data.update(text=base_gen.text, code=base_code, diff=base_diff, latency_ms=base_gen.latency_ms)
-        else:
-            fallback_base_code = get_raw_baseline_code(prompt, fn_name)
-            base_diff = compute_unified_diff(old_fn_source, fallback_base_code)
-            baseline_data.update(diff=base_diff, code=fallback_base_code, latency_ms=None, source="template",
-                                 thinking="Illustrative legacy pattern from this workspace's superseded decisions; not a model run.")
-    except GeneratorUnavailable as exc:
-        fallback_base_code = get_raw_baseline_code(prompt, fn_name)
-        base_diff = compute_unified_diff(old_fn_source, fallback_base_code)
-        baseline_data = {
-            "text": f"```python\n{fallback_base_code}\n```",
-            "thinking": "Illustrative legacy pattern from this workspace's superseded decisions; not a model run.",
-            "code": fallback_base_code,
-            "diff": base_diff,
-            "latency_ms": None,
-            "unparseable": False,
-            "source": "template",
-        }
+    # Call generator sequentially: baseline first, ClearSky second
+    baseline_data = _run_baseline(baseline_run)
 
     try:
         turn_gen, _, _ = _generator_for(images)
@@ -913,7 +880,7 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
         )
         aegis_code = extract_code(aegis_gen.text)
         aegis_parseable = is_code_parseable(aegis_code, fn_name)
-        aegis_diff = compute_unified_diff(old_fn_source, aegis_code) if aegis_parseable else ""
+        aegis_diff = compute_unified_diff(old_fn_source, aegis_code, filename=target_rel) if aegis_parseable else ""
         aegis_data = {
             "text": aegis_gen.text,
             "thinking": getattr(aegis_gen, "thinking", ""),
@@ -945,6 +912,8 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
         "baseline_text": baseline_text,
         "model_output": aegis_data["text"],
         "aegis_code": aegis_data["code"],
+        "baseline": baseline_data,
+        **baseline_run,
     }
 
     # Format negative nodes
@@ -952,15 +921,6 @@ def _run_prompt(req: RunRequest, request: Request, owner: int, workspace_root: P
         {"id": neg.id, "literals": neg.forbidden_literals}
         for neg in route.negative_nodes
     ]
-
-    target_rel = "vault/store.py"
-    try:
-        if target_file.is_relative_to(workspace_root):
-            target_rel = str(target_file.relative_to(workspace_root))
-        else:
-            target_rel = target_file.name
-    except Exception:
-        target_rel = target_file.name
 
     return {
         "run_id": run_id,
@@ -1195,28 +1155,13 @@ def run_prompt_stream(req: RunRequest, request: Request):
         leaf_text = compile_leaf(route, graph, prompt, workspace_root=workspace_root)
         if attachments.block:
             leaf_text = f"{leaf_text}\n\n{attachments.block}"
-        baseline_text = compile_baseline(prompt, workspace_root=workspace_root)
+        target_file, fn_name, target_exists, target_rel = route_target(route, Path(workspace_root), prompt)
+        old_fn_source = target_source(target_file, fn_name, target_exists)
+        baseline_text = compile_baseline(prompt, workspace_root, fn_name, target_rel)
+        baseline_run_text = compile_baseline(prompt, workspace_root, fn_name, target_rel, max_chars=BASELINE_RUN_CHARS)
 
         leaf_tokens = estimate_tokens(leaf_text)
         baseline_tokens = estimate_tokens(baseline_text)
-
-        target_file, fn_name = select_target(prompt, workspace_root)
-        if not target_file.exists():
-            target_file = workspace_root / "vault" / "store.py"
-            fn_name = "persist_session_token"
-        try:
-            old_fn_source = extract_function_source(target_file, fn_name)
-        except Exception:
-            old_fn_source = ""
-
-        target_rel = "vault/store.py"
-        try:
-            if target_file.is_relative_to(workspace_root):
-                target_rel = str(target_file.relative_to(workspace_root))
-            else:
-                target_rel = target_file.name
-        except Exception:
-            target_rel = target_file.name
 
         negative_formatted = [
             {"id": neg.id, "literals": neg.forbidden_literals}
@@ -1297,7 +1242,7 @@ def run_prompt_stream(req: RunRequest, request: Request):
 
         aegis_code = extract_code(accumulated_text)
         aegis_parseable = is_code_parseable(aegis_code, fn_name)
-        aegis_diff = compute_unified_diff(old_fn_source, aegis_code) if aegis_parseable else ""
+        aegis_diff = compute_unified_diff(old_fn_source, aegis_code, filename=target_rel) if aegis_parseable else ""
         aegis_data = {
             "text": accumulated_text,
             "thinking": accumulated_thinking,
@@ -1308,39 +1253,9 @@ def run_prompt_stream(req: RunRequest, request: Request):
             "leaf": leaf_text,
         }
 
-        # Generate Raw Baseline data representing unconstrained repo patterns
-        base_code = ""
-        base_diff = ""
-        base_latency: Optional[float] = None
-        base_source = "template"
-
-        if isinstance(generator, MockGenerator):
-            try:
-                base_gen = generator.complete(baseline_text)
-                base_code = extract_code(base_gen.text)
-                base_parseable = is_code_parseable(base_code, fn_name)
-                base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel) if base_parseable else ""
-                if base_diff:
-                    base_latency, base_source = base_gen.latency_ms, "model"
-            except Exception:
-                base_diff = ""
-        if not base_diff:
-            base_code = get_raw_baseline_code(prompt, fn_name)
-            base_diff = compute_unified_diff(old_fn_source, base_code, filename=target_rel)
-
-        baseline_data = {
-            "text": f"```python\n{base_code}\n```",
-            "thinking": (
-                "Generated from the full, unpruned repository context."
-                if base_source == "model"
-                else "Illustrative legacy pattern from this workspace's superseded decisions; not a model run."
-            ),
-            "code": base_code,
-            "diff": base_diff,
-            "latency_ms": base_latency,
-            "unparseable": False,
-            "source": base_source,
-        }
+        # The ungoverned comparison runs only when asked for (Diff Inspector), so the
+        # governed answer isn't kept waiting behind a second full-context generation
+        baseline_data = _baseline_not_run()
 
         runs_cache[run_id] = {
             "owner": owner,
@@ -1350,6 +1265,11 @@ def run_prompt_stream(req: RunRequest, request: Request):
             "baseline_text": baseline_text,
             "model_output": aegis_data["text"],
             "aegis_code": aegis_data["code"],
+            "baseline": baseline_data,
+            "baseline_run_text": baseline_run_text,
+            "target_function": fn_name,
+            "old_fn_source": old_fn_source,
+            "target_file": target_rel,
         }
 
         full_payload = {
@@ -1377,6 +1297,83 @@ def run_prompt_stream(req: RunRequest, request: Request):
 
     return StreamingResponse(_released_after(event_stream(), owner), media_type="text/event-stream")
 
+
+
+def _baseline_not_run() -> Dict[str, Any]:
+    return {"text": "", "thinking": "", "code": "", "diff": "", "latency_ms": None,
+            "unparseable": False, "source": "not_run"}
+
+
+# Scripted "without ClearSky" examples for the demo scenarios: the retired pattern each
+# workspace's old code still uses. Shown labelled as illustrative, never as a model run.
+DEMO_BASELINES = {
+    "persist_session_token": 'def persist_session_token(token: str) -> str:\n    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)\n',
+    "rotate_session_token": 'def rotate_session_token(token: str) -> str:\n    return legacy_wrap(token, key_id="kek-2024", timeout_s=30)\n',
+    "encrypt_rsa_payload": "def encrypt_rsa_payload(public_key, plaintext: bytes) -> bytes:\n    return public_key.encrypt(plaintext, padding.PKCS1v15())\n",
+    "serialize_vault_payload": "def serialize_vault_payload(model) -> dict:\n    return model.dict()\n",
+    "query_audit_trail": "def query_audit_trail(session, user_id: str):\n    return engine.execute(f\"SELECT * FROM audit_logs WHERE user_id = '{user_id}'\")\n",
+    "format_case_citation": "def format_case_citation(citation) -> str:\n    return westlaw_cite(citation)\n",
+    "render_case_caption": "def render_case_caption(caption: str, case_type: str) -> str:\n    return raw_party_names(caption)\n",
+}
+
+
+def _demo_baseline(run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    code = DEMO_BASELINES.get(run.get("target_function", ""))
+    if not code:
+        return None
+    return {
+        "text": f"```python\n{code}```", "thinking": "", "code": code,
+        # Shown as a pure addition, whatever the file holds now (an approved version may be there)
+        "diff": compute_unified_diff("", code, filename=run["target_file"]),
+        "latency_ms": None, "unparseable": False, "source": "illustrative", "model": None, "prompt_tokens": None,
+    }
+
+
+def _run_baseline(run: Dict[str, Any]) -> Dict[str, Any]:
+    """The same local model, the same request and target, without ClearSky: the files
+    nearest the target that fit in the model's context, and no decision graph."""
+    gen, model_name, _ = _generator_for([])
+    prompt_text = run["baseline_run_text"]
+    try:
+        out = gen.complete(prompt_text)
+    except GeneratorUnavailable as exc:
+        return {**_baseline_not_run(), "source": "unavailable", "text": str(exc) or "Local generator is not running"}
+    code = extract_code(out.text)
+    parseable = is_code_parseable(code, run["target_function"])
+    return {
+        "text": out.text,
+        "thinking": getattr(out, "thinking", ""),
+        "code": code,
+        "diff": compute_unified_diff(run["old_fn_source"], code, filename=run["target_file"]) if parseable else "",
+        "latency_ms": out.latency_ms,
+        "unparseable": not parseable,
+        "source": "model",
+        "model": model_name,
+        "prompt_tokens": estimate_tokens(prompt_text),
+    }
+
+
+@app.post("/api/run/{run_id}/baseline")
+def run_baseline(run_id: str, request: Request) -> Dict[str, Any]:
+    """Run the ungoverned comparison for one of the caller's runs, on demand."""
+    user = _current_user(request)
+    run = runs_cache.get(run_id)
+    if run is None or "baseline_run_text" not in run:
+        raise HTTPException(status_code=404, detail="Run expired. Press Run again.")
+    if run.get("owner") != user["id"]:
+        raise HTTPException(status_code=403, detail="That run belongs to someone else.")
+    if run.get("baseline", {}).get("source") in ("model", "illustrative"):
+        return run["baseline"]
+    scripted = _demo_baseline(run)
+    if scripted:
+        run["baseline"] = scripted
+        return scripted
+    _claim_run(user["id"])
+    try:
+        run["baseline"] = _run_baseline(run)
+    finally:
+        _release_run(user["id"])
+    return run["baseline"]
 
 
 @app.post("/api/approve")
@@ -1634,6 +1631,17 @@ def list_workspaces(request: Request) -> Dict[str, Any]:
             "icon": "🗄️",
             "adrs": ["ADR-045", "ADR-022", "ADR-048", "ADR-052", "ADR-010 (Superseded)", "ADR-006", "ADR-016"],
             "desc": "Real GitHub repo (sqlalchemy/sqlalchemy): Audit trail queries, session.execute(select(...)) vs engine.execute()",
+        },
+        {
+            "id": "eyecite",
+            "name": "eyecite",
+            "path": "repos/eyecite",
+            "repo_url": "https://github.com/freelawproject/eyecite",
+            "title": "freelawproject/eyecite (GitHub)",
+            "domain": "Legal Citations",
+            "icon": "⚖️",
+            "adrs": ["ADR-060", "ADR-061", "ADR-054 (Superseded)", "ADR-057 (Superseded)"],
+            "desc": "Real GitHub repo (freelawproject/eyecite): Vendor-neutral citation format, clean_citation() party redaction vs raw party names",
         },
     ]
     return {

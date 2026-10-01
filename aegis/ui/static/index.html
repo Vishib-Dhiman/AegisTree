@@ -15,7 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.5">
+  <link rel="stylesheet" href="style.css?v=4.6">
+  <link rel="stylesheet" href="tour.css?v=3">
 </head>
 <body>
 
@@ -119,6 +120,20 @@
                 <i class="scn-dot block"></i><span class="recent-text">Force engine.execute</span><span class="scn-tag">refusal</span>
               </div>
 
+              <div class="scn-group-label">eyecite</div>
+              <div class="recent-item" data-prompt="cite_neutral">
+                <i class="scn-dot ok"></i><span class="recent-text">Neutral citation format</span><span class="scn-tag">ADR-060</span>
+              </div>
+              <div class="recent-item danger" data-prompt="cite_westlaw">
+                <i class="scn-dot block"></i><span class="recent-text">Force westlaw_cite</span><span class="scn-tag">refusal</span>
+              </div>
+              <div class="recent-item" data-prompt="cite_redact">
+                <i class="scn-dot ok"></i><span class="recent-text">Redact case parties</span><span class="scn-tag">ADR-061</span>
+              </div>
+              <div class="recent-item danger" data-prompt="cite_rawnames">
+                <i class="scn-dot block"></i><span class="recent-text">Force raw_party_names</span><span class="scn-tag">refusal</span>
+              </div>
+
               <div class="scn-group-label">Edge cases</div>
               <div class="recent-item" data-prompt="kyber">
                 <i class="scn-dot haze"></i><span class="recent-text">Migrate to Kyber</span><span class="scn-tag">abstain</span>
@@ -183,6 +198,11 @@
               0 egress
             </span>
           </div>
+          <span class="help-tour-wrap">
+            <button id="btn-help-tour" class="icon-btn" type="button" title="Guided tour" aria-label="Guided tour" aria-haspopup="true" aria-expanded="false">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.5-2.7 4.1"/><path d="M12 17.6h.01"/></svg>
+            </button>
+          </span>
           <button id="btn-theme-toggle" class="icon-btn theme-toggle" title="Switch between day and night sky" aria-label="Toggle theme">
             <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
             <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
@@ -450,20 +470,11 @@
         </div>
         <div class="adr-modal-body workspace-body">
           <p class="workspace-intro">
-            Pick a demo repository or point at any directory. System 1 ingests its ADRs, knowledge graph and production code.
+            Pick a repository. System 1 ingests its ADRs, knowledge graph and production code.
           </p>
 
           <div id="workspace-presets-container" class="workspace-grid"></div>
 
-          <div class="adr-field-group">
-            <label class="adr-field-label">Or a custom path</label>
-            <div class="workspace-path-row">
-              <input id="workspace-path-input" class="adr-text-input" placeholder="/absolute/path/to/repo or relative_path" spellcheck="false" />
-              <button id="btn-workspace-switch" class="btn-xs-primary">Switch</button>
-            </div>
-          </div>
-
-          <div id="workspace-status-info" class="workspace-status"></div>
         </div>
         <div class="adr-edit-footer">
           <button id="btn-workspace-cancel" class="btn-xs-secondary">Close</button>
@@ -473,6 +484,7 @@
 
   </div>
 
-  <script src="app.js?v=4.9"></script>
+  <script src="app.js?v=5.5"></script>
+  <script src="tour.js?v=10"></script>
 </body>
 </html>

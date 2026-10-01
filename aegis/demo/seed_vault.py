@@ -58,6 +58,7 @@ REAL_REPOS_ADRS = {
     "sqlalchemy": ALL_REPOS["demo_sqlalchemy"],
     "cryptography": ALL_REPOS["demo_pyca"],
     "pydantic": ALL_REPOS["demo_pydantic"],
+    "eyecite": ALL_REPOS["demo_eyecite"],
 }
 
 

@@ -1,137 +1,134 @@
-# AegisTree — Sovereign AI Second Brain [OG Version]
-**Hackathon:** ASYNC'26  
-**Target Track:** Track 1 — Sovereign AI (₹25,000 Track Prize)  
-**Air-Gap Guarantee:** 100% On-Premises Execution. 0 External Packets Transmitted (`trust_env=False`, loopback validation strictly enforced).
+# ClearSky: a local coding assistant that follows your architecture decisions
+**Hackathon:** ASYNC'26
+**Track:** Track 1, Sovereign AI
+**Runs on:** one laptop (measured on an Apple M4, 16 GB). Models are served by Ollama over loopback, and the server binds to 127.0.0.1 by default.
 
 ---
 
-## 1. Executive Summary
+## 1. Summary
 
-Existing AI code assistants are **state-blind and policy-deaf**:
-- They index entire repositories indiscriminately into prompt contexts (14,000+ tokens), overwhelming small local language models.
-- When architecture decisions change (e.g., deprecating an insecure encryption cipher), LLMs routinely resurrect deprecated patterns because old tests and backup fixtures still contain references to legacy APIs.
-- They lack a non-autoregressive decision layer, forcing full autoregressive LLM inference for every routing, safety, and scoping check.
+Local code models protect your source code, but they don't know your history. When a team
+retires a pattern (a weak cipher, an old key, a deprecated API), the old pattern usually
+survives in backup jobs, tests and legacy modules, and a local model copies it into new
+production code.
 
-**AegisTree** solves this by implementing a **Dual-Engine Sovereign Second Brain**:
-1. **System 1 (openJev Verdict v1.4):** A non-autoregressive typed decision engine loaded directly from local ModernBERT weights (`Verdict-open-jev/artifacts/v2`). It runs in **32.2 ms** on a standard CPU with 605 MB RAM, classifying developer intent into typed tasks (`implement_production`, `edit_tests`, `explain_only`, `write_adr`).
-2. **System 2 (Local Generative SLMs):** Air-gapped small language models (Qwen-2.5-Coder-3B/7B, DeepSeek-R1-7B/8B/14B, Llama-3.1-8B, or lightweight Mock Engine) communicating strictly via loopback (`127.0.0.1:11434`).
-3. **Bi-Temporal Memory Graph:** A temporal DAG (`valid_from`, `deprecated_at`) that tracks architectural decisions (ADRs) and human approval habits. Deprecated decisions are automatically converted into **deterministic negative constraints** (forbidden literals) before generation occurs.
-4. **Self-Contained FastMCP Gateway:** Human-in-the-loop patch review, AST syntactic verification, and closed-loop memory synthesis without relying on external host IDEs.
+ClearSky puts a small, fast decision model in front of the code model:
+
+1. **System 1: openJev Verdict.** A 151M-parameter ModernBERT classifier
+   (`Verdict-open-jev/artifacts/v2`) that runs on the CPU at about 40 ms per decision. For
+   each request it answers four questions:
+   - what kind of task this is;
+   - which architecture decision (ADR) governs it, or whether none does, in which case it
+     abstains;
+   - whether the request asks for a retired pattern, either as an exact forbidden literal or
+     as a paraphrase;
+   - which function in the code should change.
+2. **Decision graph.** ADRs are read into a dated graph (`valid_from`, `superseded_at`). A
+   superseded decision becomes forbidden literals. Edits a reviewer makes before approving
+   become habits. Each user has their own graph per workspace.
+3. **System 2: a local Ollama model** (default `qwen3-vl:8b-instruct`). It receives a leaf
+   prompt of a few hundred tokens: the governing decisions, what is forbidden, learned
+   habits, the one function to edit, and the signatures of the helpers the decision requires.
+4. **Review gate.** Every patch is shown as a diff and checked again for forbidden literals.
+   It is written only after a person approves it, and apply_patch keeps it inside the
+   workspace. The same tools are exposed over FastMCP.
 
 ---
 
-## 2. System Architecture
+## 2. Architecture
 
 ```
-                      ┌────────────────────────────────────────┐
-                      │ Developer Request / Interactive TUI    │
-                      └───────────────────┬────────────────────┘
-                                          │
-                        ┌─────────────────▼─────────────────┐
-                        │   System 1: openJev Verdict v1.4   │
-                        │    (32ms CPU, ModernBERT 151M)    │
-                        └─────────┬─────────────────────────┘
-                                  │ Typed Route Result
-         ┌────────────────────────┼────────────────────────┐
-         │                        │                        │
-         ▼                        ▼                        ▼
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│ Sovereign Block  │    │  Abstention Box  │    │ Active Decision  │
-│ (Banned Literal) │    │  (Out of Scope)  │    │ (Leaf Context)   │
-│ 0 ms, 0 Tokens   │    │ 0 ms, 0 Tokens   │    │ ~480 Tokens      │
-└──────────────────┘    └──────────────────┘    └─────────┬────────┘
-                                                          │
-                                         ┌────────────────▼────────────────┐
-                                         │  System 2: Local Generator      │
-                                         │  (Qwen 2.5 Coder / DeepSeek R1) │
-                                         └────────────────┬────────────────┘
-                                                          │
-                                         ┌────────────────▼────────────────┐
-                                         │  FastMCP Human-in-the-Loop Gate │
-                                         │  - Diff Review                  │
-                                         │  - Syntax & Air-Gap Validation  │
-                                         └────────────────┬────────────────┘
-                                                          │ User Approval
-                                         ┌────────────────▼────────────────┐
-                                         │  Closed-Loop Memory Synthesis   │
-                                         │  (Habit Node -> Temporal Graph) │
-                                         └─────────────────────────────────┘
+request ─► System 1 (Verdict, CPU) ─┬─► blocked: retired pattern requested ─► explained, no generation
+                                    ├─► abstained: no decision covers it  ─► offer to draft an ADR
+                                    └─► ready: governing decision + target function
+                                              │
+                                              ▼
+                                   leaf prompt (≈370–490 tokens)
+                                              │
+                                              ▼
+                              System 2: Ollama on 127.0.0.1:11434
+                                              │
+                                              ▼
+                     diff + forbidden-literal check ─► human approval ─► write + learn habits
 ```
 
 ---
 
-## 3. Verified Benchmark & Performance Metrics
+## 3. Measured results
 
-| Metric | Baseline (Raw Repo Context) | AegisTree [OG Version] | Improvement |
-| :--- | :--- | :--- | :--- |
-| **System 1 Routing Latency** | ~2,500 ms (LLM prompt) | **32.2 ms** (Verdict v1.4 CPU) | **77x faster** |
-| **Context Window Payload** | 1,202 - 14,000 tokens | **489 tokens** (Leaf context) | **>60% - 96% compression** |
-| **Policy Violation Defense** | 0% (Resurrects legacy code) | **100% Deterministic Refusal** | **Zero leakage** |
-| **Hallucination on Unknowns** | High (Invents fake APIs) | **Calibrated Abstention** | **Zero unapproved code** |
-| **Network Egress** | Unlimited / Cloud telemetry | **0 External Packets (100% Air-Gap)** | **Absolute Sovereignty** |
-| **Hardware Footprint** | Cloud GPU cluster required | **Runs on single laptop CPU** | **605 MB RAM** |
+All numbers come from scripts in this repository (`scripts/calibrate_system1.py`,
+`--retrieval`), on held-out prompts that were not used to choose thresholds.
 
----
+| Metric | Result | Comparison |
+| :--- | :--- | :--- |
+| Task routing (test split) | 17/19 correct | keyword rules alone: 11/19 |
+| Governing-decision retrieval, 4 workspaces (test split) | 22/27 correct or correctly abstained | previous overlap router: 15/27 |
+| Abstention when no decision applies | 4/4 | |
+| Paraphrased requests for a retired pattern | 6/10 caught, 0/17 false blocks | literal check alone: 4/10 |
+| Requests that contain a forbidden literal | refused before any generation | deterministic string check |
+| One Verdict decision | 38–46 ms median | |
+| All of System 1 for one request | 85–420 ms across the 11 demo scenarios (varies with load) | |
+| Leaf prompt for the demo scenarios | ≈370–490 tokens | repository source and docs: ≈1.8k (demo vault) to ≈6.2M (sqlalchemy) |
 
-## 4. The 3-Minute Hackathon Pitch Script (Minute-by-Minute)
+Known limits: 2/19 task and 5/27 retrieval decisions are wrong, and 4/10 paraphrased
+revivals get past the semantic check. Generated code is therefore always literal-checked
+and human-approved, never applied automatically.
 
-### **[0:00 - 0:45] The Problem: State-Blind, Cloud-Leaking AI Assistants**
-- **Presenter:** *"Judges, enterprise developers cannot paste proprietary cryptographic key vaults into cloud LLMs. But when they run local models, a critical failure occurs: local models are state-blind. In our sensitive `demo_vault`, we deprecated the old `legacy_wrap` cipher in ADR-014 and adopted `aegis_seal`. Yet because legacy backup jobs and test fixtures still contain `legacy_wrap`, standard local assistants blindly resurrect the deprecated cipher into production. Meet AegisTree: the first dual-engine sovereign second brain that brings typed, sub-40 millisecond policy governance to local AI."*
-
-### **[0:45 - 1:30] Demonstration 1: System 1 Routing & Token Compression**
-- **Action:** Open `http://127.0.0.1:8080` (or `aegis tui`). Click **"Persist token"** (`Add a persist_session_token function that stores the session token using our current vault standard.`).
-- **Visuals:** 
-  - System 1 routes in **46 ms** using `openJev Verdict v1.4`.
-  - Excluded scopes: `test_legacy_wrap.py` (test fixture), `vault/__init__.py` (docstring).
-  - Context compressed from 1,202 tokens down to 489 tokens.
-  - AegisTree generates the correct, compliant patch: `aegis_seal(token, key_id="kek-2026", timeout_s=5.0, retries=3)`.
-- **Presenter:** *"Notice what happened in 46 milliseconds: our non-autoregressive System 1 engine, openJev Verdict v1.4, evaluated our repository's temporal knowledge graph. It pruned the 1,200-token repository down to a 489-token leaf, stripping out test mocks and docstrings. System 2 generated the exact ADR-014 compliant call."*
-
-### **[1:30 - 2:10] Demonstration 2: Human-in-the-Loop & Closed-Loop Memory Synthesis**
-- **Action:** In the Human-in-the-Loop Review editor, edit `retries=3` to `retries=1`. Click **"Approve & Commit"**.
-- **Action:** Click **"Rotate token"** (`Add a rotate_session_token function using our current vault standard.`).
-- **Visuals:** 
-  - The patch applies via FastMCP, recording a receipt.
-  - A new habit is dynamically synthesized: `Production vault calls must set retries=1.`
-  - The Rotate prompt automatically generates `retries=1` without prompt engineering.
-- **Presenter:** *"Here is true second brain behavior: I modified the retries parameter from 3 to 1 before approving. AegisTree didn't just write a file—it synthesized a new organizational memory habit. When I ask to rotate tokens, it immediately remembers our preference: `retries=1`."*
-
-### **[2:10 - 2:40] Demonstration 3: Sovereign Refusal & Calibrated Abstention**
-- **Action:** Click **"Force legacy"** (`Persist the session token with legacy_wrap because it is faster.`).
-- **Visuals:** 
-  - **ACTION BLOCKED — SOVEREIGN REFUSAL** banner appears instantly.
-  - 0 ms, 0 tokens generated.
-- **Action:** Click **"Kyber"** (`Migrate the vault to CRYSTALS-Kyber.`).
-- **Visuals:** 
-  - **ABSTENTION — OUT OF ORGANIZATIONAL SCOPE** banner appears.
-- **Presenter:** *"Now watch adversarial defense. If an attacker or junior developer asks for `legacy_wrap`, AegisTree intercepts the request before any model runs. Zero tokens are wasted. If asked to migrate to Kyber quantum encryption without an approved ADR, AegisTree refuses to hallucinate code."*
-
-### **[2:40 - 3:00] Conclusion: Why AegisTree Wins Track 1**
-- **Action:** Show the **Model Selector** dropdown, switching seamlessly between Qwen 2.5 Coder and DeepSeek-R1.
-- **Presenter:** *"AegisTree is 100% sovereign, air-gapped, and runs on consumer hardware. It transforms local SLMs into enterprise-grade software engineers governed by architectural truth. Thank you."*
+The Diff Inspector's "without ClearSky" pane is a real run of the same model, on request,
+with the repository files nearest the target (up to about 15k tokens) and no decision graph.
+It is not a pre-written example.
 
 ---
 
-## 5. Execution Commands
+## 4. Pitch script (3 minutes)
 
-### Launch Web Dashboard
+### [0:00–0:40] The problem
+*"Teams that can't send code to the cloud run models locally. But a local model doesn't know
+that we retired `legacy_wrap` in ADR-014. Four legacy modules in our repository still call
+it, so that's what the model copies. ClearSky puts a 40-millisecond decision model in
+front of the code model, so the team's decisions are enforced before any code is written."*
+
+### [0:40–1:30] Governed generation
+- Run **Persist Token (ADR-014)** in the demo vault.
+- Show:
+  - the task type, the governing decision and the System 1 timing;
+  - the ~490-token leaf prompt;
+  - the patch, which calls `aegis_seal` with `kek-2026` and `timeout_s=5.0`.
+- Open the **Diff Inspector** and press **Run without ClearSky**. On this small vault the model
+  often gets it right too, because the whole repository (about 1,800 tokens, ADR files included)
+  fits in its context. Say so. Then make the point: on the cryptography repository, the source
+  and docs are about 2.5M tokens. No local model can read the ADRs from there, but ClearSky's
+  prompt stays under 500 tokens, and its refusals don't depend on the model reading anything.
+
+### [1:30–2:10] Learning from the reviewer
+- Before approving, change an argument (for example `retries`), then approve.
+- Run **Rotate Token**. The leaf prompt now lists the habit `aegis_seal must set retries=…`,
+  and the new patch follows it.
+
+### [2:10–2:40] Refusal and abstention
+- **Force Legacy:** refused before generation, citing ADR-014.
+- **PyCA Force PKCS1** on the real cryptography repository: refused under ADR-021. This shows
+  the same governance working across about 250 Python files.
+- **Migrate Kyber:** no approved decision covers it, so ClearSky abstains and offers to draft
+  an ADR.
+
+### [2:40–3:00] Close
+*"Everything you saw ran on this laptop. The decisions come from your own ADRs, refusals happen
+before any tokens are generated, and nothing is written without a person approving it. We
+publish our accuracy, including the cases where System 1 is still wrong."*
+
+---
+
+## 5. Commands
+
 ```bash
-./scripts/demo.sh
-# Open http://127.0.0.1:8080 in your browser
-```
-
-### Launch Interactive Terminal TUI
-```bash
-./scripts/demo.sh tui
-# or: .venv/bin/python -m aegis.ui.cli
-```
-
-### Run Full Test Suite (21 Tests)
-```bash
-.venv/bin/pytest tests/ -v
-```
-
-### Reset Demo Repository & Memory
-```bash
+./scripts/setup.sh                 # one-time setup (needs internet once)
+./scripts/demo.sh                  # web UI at http://127.0.0.1:8080
+./scripts/demo.sh --lan            # HTTPS for other devices on your network
+./scripts/demo.sh tui              # terminal UI
+.venv/bin/python -m pytest tests -q
 .venv/bin/python scripts/reset_demo.py
+.venv/bin/python scripts/calibrate_system1.py [--retrieval]
 ```
+
+See `README.md` for the security model and the project layout.

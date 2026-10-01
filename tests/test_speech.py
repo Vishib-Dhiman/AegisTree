@@ -1,3 +1,4 @@
+import gc
 import io
 import shutil
 import subprocess
@@ -38,11 +39,15 @@ def spoken(tmp_path_factory) -> bytes:
 
 
 @pytest.fixture(scope="module")
-def stt() -> SpeechToText:
+def stt():
     s = SpeechToText()
     if not s.status()["available"]:
         pytest.skip("speech model not downloaded (scripts/get_speech_model.sh)")
-    return s
+    yield s
+    # Free the native Whisper model now, not during interpreter exit where it can
+    # race other native libraries' teardown (seen as a rare libc++ mutex abort)
+    s._model = None
+    gc.collect()
 
 
 def test_browser_recording_is_transcribed_locally(stt, spoken):
